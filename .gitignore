@@ -1,0 +1,3 @@
+bazel-*
+/bazel-outbase/
+moq_trace/artifacts/

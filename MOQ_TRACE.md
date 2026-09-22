@@ -73,14 +73,48 @@ the execution root, so they arrive through `--cxxopt`, `--linkopt`, and
 `CPLUS_INCLUDE_PATH`:
 
 ```sh
-moq_trace/build.sh .                       # traced build of //quiche:moqt_relay
-TRACE=0 moq_trace/build.sh .               # same sources, hooks compiled out
+moq_trace/build.sh                         # traced build of //quiche:moqt_relay
+TRACE=0 moq_trace/build.sh                 # same sources, hooks compiled out
+TRACE=0 moq_trace/test.sh                  # the MoQ test targets, hooks off
+moq_trace/capture.sh moq_trace/artifacts/capture ./bazel-bin/quiche/moqt_relay loopback
+moq_trace/analyze.sh moq_trace/artifacts/capture/session \
+  --output moq_trace/artifacts/capture/out.duckdb \
+  --object-size 4096 --subscribers 1 --pid <relay pid printed by capture.sh>
 ```
 
+Each script re-executes itself inside the `moq-trace2` development shell when its
+tools are not already on `PATH`, so the checkout is the only thing to open. Set
+`MOQ_TRACE2_SRC` when the two repositories are not siblings.
+
+Options are collected wherever they appear and the first argument that names a
+directory is the worktree, so `moq_trace/test.sh . --jobs=8` tests this checkout
+and `moq_trace/test.sh --jobs=8` tests the checkout that holds the script. An
+option is never mistaken for a target, and `moq_trace/build.sh` and
+`moq_trace/test.sh` fall back to their own checkout and to their default targets.
+Set `MOQ_TRACE_OUTBASE` to a second Bazel output base when the traced and
+untraced configurations should both stay compiled: each run otherwise
+invalidates the other one's objects, and the alternate base leaves the workspace
+`bazel-*` symlinks pointing at the traced binary.
+
+`capture.sh` starts the relay under LTTng, drives it with the `moq-bench` peers
+from `moq-trace2`, decodes the capture with Babeltrace 2, and prints the relay pid
+and the matching analysis command. It mints a throwaway certificate into the
+output directory unless `MOQ_TRACE_CERT` and `MOQ_TRACE_KEY` name an existing
+pair, so a capture needs nothing left over from an earlier run.
+
 Traced builds require Linux and LTTng-UST. A build without the macro compiles the
-modified sources with no trace code and no new link dependencies. The toolchain
-paths in `moq_trace/build.sh` default to the local Nix shell and can be overridden
-with the `MOQ_TRACE_*` environment variables.
+modified sources with no trace code and no new link dependencies. The provider
+archives are consumed from `moq-trace2/target/install` rather than copied here,
+because a snapshot of them would drift from the schemas the analyzer reads; point
+`MOQ_TRACE_PREFIX` at another prefix, or regenerate that one with
+`cmake --install ~/moq-trace2/target/cmake --prefix <prefix> --component moq_trace
+--component quic_trace`. The compiler, bazel, and ICU paths default to the local
+Nix shell and can be overridden with the `MOQ_TRACE_*` environment variables.
+
+Build output, Bazel convenience symlinks, and `moq_trace/artifacts` are ignored by
+git. The artifacts directory holds the traced relay binary under `bin/`, the test
+logs under `logs/`, and one directory per capture with its CTF trace, decoded
+events, DuckDB file, and peer logs.
 
 ## Bring-up fixes beyond instrumentation
 
@@ -102,17 +136,22 @@ Three fixes belong to this fork and are not tracepoints:
 ## Verification
 
 ```sh
-moq_trace/capture.sh /tmp/capture ./bazel-bin/quiche/moqt_relay loopback
-moq-trace analyze /tmp/capture/session --output /tmp/capture/trace.duckdb \
+moq_trace/build.sh
+moq_trace/test.sh
+TRACE=0 moq_trace/test.sh
+moq_trace/capture.sh moq_trace/artifacts/capture ./bazel-bin/quiche/moqt_relay loopback
+moq_trace/analyze.sh moq_trace/artifacts/capture/session \
+  --output moq_trace/artifacts/capture/trace.duckdb \
   --object-size 4096 --subscribers 1 --pid <relay-vpid>
 ```
 
 A six second traced loopback run through the relay reported 78 received groups
-with no mismatches in the benchmark and produced 473 decoded MoQ object events and
-3426 packet events in each direction. The analysis of the relay process resolved
-118 inbound objects into exactly 118 outbound copies, correlated every object with
-the packets that carried it (236 coverage rows), and reported object, QUIC object,
-packet, and socket metrics.
+with no mismatches in the benchmark and produced 476 object start and end pairs
+and 3246 packet start and end pairs. The analysis of the relay process resolved
+119 inbound objects into exactly 119 outbound copies, with one `create` and one
+`frame_commit` phase and four payload fragments each. It correlated every object
+with the packets that carried it (238 coverage rows) and reported object, QUIC
+object, packet, and socket metrics.
 
 The ordinary configuration keeps the standard suite green: with the macro off,
 the `//quiche:moqt_*_test` targets pass, and the built relay exports neither

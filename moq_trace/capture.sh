@@ -9,21 +9,41 @@
 #   --default_upstream.
 #
 # Environment: PORT (default 19667), DURATION (default 6s), MOQ_TRACE_BENCH,
-# MOQ_TRACE_CERT, MOQ_TRACE_KEY.
+# MOQ_TRACE_CERT, MOQ_TRACE_KEY. A self-signed certificate for 127.0.0.1 and
+# localhost is generated into the output directory when neither is given; both
+# peers run with verification disabled.
 set -uo pipefail
 
 out=${1:?usage: capture.sh <output-dir> <relay-binary> [loopback|upstream]}
 relay=${2:?usage: capture.sh <output-dir> <relay-binary> [loopback|upstream]}
 topology=${3:-loopback}
-bench=${MOQ_TRACE_BENCH:-/home/siyuan/moq-trace2/moq-bench/target/release}
-cert=${MOQ_TRACE_CERT:-/tmp/google-quiche-trace.H45yy3/relay.crt}
-key=${MOQ_TRACE_KEY:-/tmp/google-quiche-trace.H45yy3/relay.key}
+
+# lttng, babeltrace2, and the benchmark peers come from the moq-trace2
+# development shell, so re-exec inside it when lttng is not already available.
+MOQ_TRACE2_SRC=${MOQ_TRACE2_SRC:-$(cd "$(dirname "$0")/../.." && pwd)/moq-trace2}
+if [ "${MOQ_TRACE_IN_DEVSHELL:-0}" != 1 ] && ! command -v lttng >/dev/null 2>&1; then
+  export MOQ_TRACE_IN_DEVSHELL=1
+  exec nix --extra-experimental-features 'nix-command flakes' develop \
+    "$MOQ_TRACE2_SRC" --command bash "${BASH_SOURCE[0]}" "$@"
+fi
+bench=${MOQ_TRACE_BENCH:-$MOQ_TRACE2_SRC/moq-bench/target/release}
 duration=${DURATION:-6s}
 session=moqtrace-$$
 port=${PORT:-19667}
 upstream_port=$((port + 1))
 
 mkdir -p "$out"
+
+# The capture has to be reproducible from this checkout alone, so mint the
+# throwaway certificate here instead of depending on a leftover temporary one.
+cert=${MOQ_TRACE_CERT:-$out/relay.crt}
+key=${MOQ_TRACE_KEY:-$out/relay.key}
+if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
+  command -v openssl >/dev/null 2>&1 || { echo "openssl is needed to mint $cert" >&2; exit 1; }
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -keyout "$key" -out "$cert" -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+fi
 
 # A leftover relay from an earlier run silently wins the port and would then be
 # the process under test, so refuse to start when the port is already taken.
