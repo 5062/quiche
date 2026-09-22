@@ -76,13 +76,14 @@ the execution root, so they arrive through `--cxxopt`, `--linkopt`, and
 moq_trace/build.sh                         # traced build of //quiche:moqt_relay
 TRACE=0 moq_trace/build.sh                 # same sources, hooks compiled out
 TRACE=0 moq_trace/test.sh                  # the MoQ test targets, hooks off
-moq_trace/capture.sh moq_trace/artifacts/capture-1 ./bazel-bin/quiche/moqt_relay loopback
+moq-trace run moq_trace/experiment.toml --output moq_trace/artifacts/capture-1
 ```
 
 Run the scripts from an environment that supplies Clang, Bazelisk or Bazel, ICU,
-LTTng-UST, Babeltrace 2, `moq-trace`, `moq-bench`, and
-`moq-bench-server`. They never enter or select a development shell or depend on
-the location of a `moq-trace2` checkout.
+and the `moq_trace` pkg-config package. The experiment command additionally
+needs `moq-trace`, `moq-bench`, LTTng, Babeltrace 2, and OpenSSL. The scripts
+never enter or select a development shell or depend on the location of a
+`moq-trace2` checkout.
 
 Options are collected wherever they appear and the first argument that names a
 directory is the worktree, so `moq_trace/test.sh . --jobs=8` tests this checkout
@@ -94,22 +95,18 @@ untraced configurations should both stay compiled: each run otherwise
 invalidates the other one's objects, and the alternate base leaves the workspace
 `bazel-*` symlinks pointing at the traced binary.
 
-`capture.sh` requires a new output directory, starts the relay under LTTng,
-drives it with the `moq-bench` peers from `moq-trace2`, decodes both providers,
-and runs the analyzer for the captured relay pid. Any failed step fails the
-command, and an exit trap stops peer processes and destroys the LTTng session.
-It mints a throwaway certificate unless `MOQ_TRACE_CERT` and `MOQ_TRACE_KEY`
-name an existing pair. `MOQ_TRACE_BENCH_CLIENT` and `MOQ_TRACE_BENCH_SERVER`
-can name explicit executable paths when the benchmark commands are not on
-`PATH`.
+The shared `moq-trace run` experiment runner requires a new output directory,
+starts the relay under LTTng, drives it with `moq-bench`, analyzes both
+providers, records provenance, and validates the workload. The checked-in TOML
+supplies Google QUICHE's relay arguments and readiness behavior while the runner
+owns process cleanup, certificate generation, capture, and analysis.
 
 Traced builds require Linux and LTTng-UST. A build without the macro compiles the
-modified sources with no trace code and no new link dependencies. The provider
-archives are consumed from the installed prefix named by the required
-`MOQ_TRACE_PREFIX` environment variable rather than copied here, because a
-snapshot would drift from the schemas the analyzer reads. The compiler and
-Bazel executable are found on `PATH`; ICU and LTTng are found with `pkg-config`.
-Nonstandard locations can use
+modified sources with no trace code and no new link dependencies. Traced builds
+consume the installed `moq_trace` pkg-config package, which supplies the facade
+headers, provider archives, LTTng dependency, and provider-retention linker
+flag. The compiler and Bazel executable are found on `PATH`; ICU is found with
+`pkg-config`. Nonstandard locations can use
 `MOQ_TRACE_CLANG`, `MOQ_TRACE_CLANGXX`, `MOQ_TRACE_BAZELISK`,
 `MOQ_TRACE_ICU_INCLUDE`, and `MOQ_TRACE_ICU_LIBDIR`.
 
@@ -143,7 +140,7 @@ Three fixes belong to this fork and are not tracepoints:
 moq_trace/build.sh
 moq_trace/test.sh
 TRACE=0 moq_trace/test.sh
-moq_trace/capture.sh moq_trace/artifacts/capture-1 ./bazel-bin/quiche/moqt_relay loopback
+moq-trace run moq_trace/experiment.toml --output moq_trace/artifacts/capture-1
 ```
 
 The capture command is the acceptance check: the benchmark must complete without

@@ -1419,7 +1419,7 @@ void MoqtDataParser::ParseNextItemFromStream() {
     case kObjectId: {
 #if defined(QUICHE_MOQ_TRACE)
       if (!trace_object_start_ns_.has_value()) {
-        trace_object_start_ns_ = quic_trace::detail::now_ns();
+        trace_object_start_ns_ = quic_trace::now_ns();
         trace_object_start_offset_ = stream_.ReadOffset();
       }
 #endif
@@ -1594,7 +1594,7 @@ void MoqtDataParser::TraceObjectHeader() {
   }
   visitor_.OnObjectHeader(metadata_, *trace_object_start_ns_,
                           trace_object_start_offset_,
-                          quic_trace::detail::now_ns(), stream_.ReadOffset());
+                          quic_trace::now_ns(), stream_.ReadOffset());
   trace_object_start_ns_.reset();
 }
 #endif

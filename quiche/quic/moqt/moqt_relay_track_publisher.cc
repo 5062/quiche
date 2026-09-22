@@ -4,7 +4,6 @@
 
 #include "quiche/quic/moqt/moqt_relay_track_publisher.h"
 
-#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -27,12 +26,6 @@
 #include "quiche/common/quiche_weak_ptr.h"
 
 namespace moqt {
-
-#if defined(QUICHE_MOQ_TRACE)
-namespace {
-std::atomic<uint64_t> next_trace_logical_object{1};
-}  // namespace
-#endif
 
 void MoqtRelayTrackPublisher::OnReply(
     const FullTrackName&,
@@ -187,8 +180,7 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     if (it == subgroup.end()) {
       PublishedObjectMetadata cached_metadata = metadata;
 #if defined(QUICHE_MOQ_TRACE)
-      cached_metadata.trace_logical_id = moq_trace::LogicalId{
-          next_trace_logical_object.fetch_add(1, std::memory_order_relaxed), 0};
+      cached_metadata.trace_logical_id = moq_trace::next_logical_id();
       metadata.trace_logical_id = cached_metadata.trace_logical_id;
 #endif
       subgroup.try_emplace(metadata.location.object, cached_metadata,

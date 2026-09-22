@@ -8,7 +8,6 @@
 #include <sys/types.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -106,12 +105,6 @@
 #include "quiche/common/quiche_text_utils.h"
 
 namespace quic {
-
-#if defined(QUICHE_MOQ_TRACE)
-namespace {
-std::atomic<uint64_t> next_moq_trace_connection_id{1};
-}  // namespace
-#endif
 
 class QuicDecrypter;
 class QuicEncrypter;
@@ -243,8 +236,7 @@ QuicConnection::QuicConnection(
       received_client_addresses_cache_(kMaxReceivedClientAddressSize),
       perspective_(perspective),
 #if defined(QUICHE_MOQ_TRACE)
-      moq_trace_connection_id_(next_moq_trace_connection_id.fetch_add(
-          1, std::memory_order_relaxed)),
+      moq_trace_connection_id_(quic_trace::next_connection_id()),
 #endif
       owns_writer_(owns_writer),
       can_truncate_connection_ids_(perspective == Perspective::IS_SERVER),

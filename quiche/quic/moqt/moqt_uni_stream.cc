@@ -168,7 +168,7 @@ void OutgoingSubgroupStream::SendObjects() {
   }
   while (stream().CanWrite()) {
 #if defined(QUICHE_MOQ_TRACE)
-    const uint64_t clone_start_ns = quic_trace::detail::now_ns();
+    const uint64_t clone_start_ns = quic_trace::now_ns();
 #endif
     std::optional<PublishedObject> object = publisher_->GetCachedObject(
         index_.group, index_.subgroup, next_object_, already_delivered_);
@@ -443,7 +443,7 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
   trace_fragment_succeeded_ = false;
   if ((trace_object_.has_value() || trace_header_.has_value()) &&
       !payload.empty()) {
-    trace_payload_start_ns_ = quic_trace::detail::now_ns();
+    trace_payload_start_ns_ = quic_trace::now_ns();
   }
 #endif
   QUICHE_DVLOG(1) << "Received OBJECT message on stream "
@@ -533,20 +533,20 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
       std::optional<uint64_t> create_start_ns;
       std::optional<uint64_t> commit_start_ns;
       if (trace_object_.has_value() && bytes_received_this_object_ == 0) {
-        create_start_ns = quic_trace::detail::now_ns();
+        create_start_ns = quic_trace::now_ns();
       } else if (trace_header_.has_value() && bytes_received_this_object_ == 0) {
-        create_start_ns = quic_trace::detail::now_ns();
+        create_start_ns = quic_trace::now_ns();
       }
       if ((trace_object_.has_value() || trace_header_.has_value()) &&
           end_of_message) {
-        commit_start_ns = quic_trace::detail::now_ns();
+        commit_start_ns = quic_trace::now_ns();
       }
 #endif
       visitor_->OnObjectFragment(track->full_track_name(), metadata, payload,
                                  bytes_received_this_object_);
 #if defined(QUICHE_MOQ_TRACE)
       StartTraceObject(metadata);
-      const uint64_t fragment_end_ns = quic_trace::detail::now_ns();
+      const uint64_t fragment_end_ns = quic_trace::now_ns();
       if (trace_object_.has_value() && create_start_ns.has_value()) {
         auto create = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_CREATE,
                                               *create_start_ns);

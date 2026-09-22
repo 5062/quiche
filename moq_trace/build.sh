@@ -12,10 +12,8 @@
 # pointing at the default output base so `./bazel-bin/quiche/moqt_relay` stays
 # the traced binary.
 #
-# The traced configuration needs the moq-trace2 C++ headers and the two LTTng
-# provider archives. They live outside the Bazel execution root, so Bazel cannot
-# model them as a hermetic dependency and they are passed through --cxxopt,
-# --linkopt, and CPLUS_INCLUDE_PATH instead.
+# The traced configuration discovers the installed moq-trace C++ facade and
+# providers through pkg-config, then passes those flags to Bazel.
 #
 # Toolchain locations come from the active environment. Override individual
 # paths with the MOQ_TRACE_* environment variables when needed.
@@ -69,43 +67,32 @@ common=(
 # TRACE=0 builds the same sources with the hooks compiled out, which is the
 # configuration an ordinary QUICHE checkout sees.
 trace=()
-trace_prefix=""
+trace_include_paths=()
 if [ "${TRACE:-1}" = 0 ]; then
   :
 else
-  trace_prefix=${MOQ_TRACE_PREFIX:-}
-  if [ -z "$trace_prefix" ]; then
-    echo "MOQ_TRACE_PREFIX must name an installed moq-trace prefix" >&2
+  if ! pkg-config --exists moq_trace; then
+    echo "moq_trace must be available through pkg-config" >&2
     exit 1
   fi
-  if [ ! -f "$trace_prefix/lib/libmoq_trace_provider.a" ] ||
-     [ ! -f "$trace_prefix/lib/libquic_trace_provider.a" ] ||
-     [ ! -f "$trace_prefix/include/moq_trace/trace.hpp" ] ||
-     [ ! -f "$trace_prefix/include/quic_trace/trace.hpp" ]; then
-    echo "trace headers or providers are missing from $trace_prefix" >&2
-    exit 1
-  fi
-  if ! pkg-config --exists lttng-ust; then
-    echo "LTTng-UST must be available through pkg-config" >&2
-    exit 1
-  fi
-  trace=(
-    --cxxopt=-DQUICHE_MOQ_TRACE
-    --linkopt="$trace_prefix"/lib/libmoq_trace_provider.a
-    --linkopt="$trace_prefix"/lib/libquic_trace_provider.a
-    --linkopt=-L"$(pkg-config --variable=libdir lttng-ust)"
-    --linkopt=-llttng-ust
-    --linkopt=-llttng-ust-common
-    --linkopt=-ldl
-    --linkopt=-Wl,-u,__start_lttng_ust_tracepoints_ptrs
-  )
-  echo "trace prefix: $trace_prefix" >&2
+  trace=(--cxxopt=-DQUICHE_MOQ_TRACE)
+  read -r -a trace_cflags <<< "$(pkg-config --cflags moq_trace)"
+  for flag in "${trace_cflags[@]}"; do
+    if [[ $flag == -I* ]]; then
+      trace_include_paths+=("${flag#-I}")
+    else
+      trace+=(--cxxopt="$flag")
+    fi
+  done
+  read -r -a trace_libs <<< "$(pkg-config --libs moq_trace)"
+  for flag in "${trace_libs[@]}"; do trace+=(--linkopt="$flag"); done
 fi
 
 cd "$worktree"
 export CC="$CLANG"
 export CXX="$CLANGXX"
-export CPLUS_INCLUDE_PATH="$ICU_INCLUDE${trace_prefix:+:$trace_prefix/include}${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+trace_include_path=$(IFS=:; echo "${trace_include_paths[*]}")
+export CPLUS_INCLUDE_PATH="$ICU_INCLUDE${trace_include_path:+:$trace_include_path}${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
 
 # An alternate output base would otherwise rewrite the workspace bazel-* symlinks
 # and silently redirect `./bazel-bin/quiche/moqt_relay` at the other build.

@@ -1,0 +1,23 @@
+output = "moq_trace/artifacts/capture"
+relay_bin = "bazel-bin/quiche/moqt_relay"
+bench_bin = "moq-bench"
+relay_args = [
+  "--bind_address", "127.0.0.1",
+  "--port", "{port}",
+  "--certificate_file", "{certificate}",
+  "--key_file", "{key}",
+  "--v=1",
+]
+relay_ready_log = ""
+relay_startup_seconds = 0.5
+relay_graceful_stop = false
+relay_url = "https://127.0.0.1:19667"
+port = 19667
+subscribers = 1
+object_size = 4096
+fps = 20
+warmup_seconds = 1
+duration_seconds = 6
+cooldown_seconds = 1
+transport_profile = "generic"
+render = false
