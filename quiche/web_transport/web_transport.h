@@ -259,6 +259,10 @@ class QUICHE_EXPORT Stream {
   // diagnostics.
   virtual StreamId GetStreamId() const = 0;
 
+  // Absolute QUIC offsets used by transport-correlated diagnostics.
+  virtual uint64_t ReadOffset() const { return 0; }
+  virtual uint64_t WriteOffset() const { return 0; }
+
   // Resets the read or the write side of the stream with the specified error
   // code.
   virtual void ResetWithUserCode(StreamErrorCode error) = 0;
@@ -381,6 +385,10 @@ class QUICHE_EXPORT Session {
   // Returns the negotiated subprotocol, or std::nullopt, if none was
   // negotiated.
   virtual std::optional<std::string> GetNegotiatedSubprotocol() const = 0;
+  // Process-local connection identity used by transport-correlated diagnostics.
+  virtual std::optional<uint64_t> TraceConnectionId() const {
+    return std::nullopt;
+  }
 };
 
 }  // namespace webtransport

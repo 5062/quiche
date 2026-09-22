@@ -39,6 +39,10 @@
 #include "quiche/common/quiche_status_utils.h"
 #include "quiche/web_transport/web_transport.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
+
 namespace moqt {
 
 namespace {
@@ -836,7 +840,8 @@ MoqtControlMessageParser::ProcessSubscribeNamespace(
     return absl::InvalidArgumentError("Request ID missing");
   }
   QUICHE_RETURN_IF_ERROR(
-      ReadTrackNamespace(reader, subscribe_namespace.track_namespace_prefix));
+      ReadTrackNamespace(reader, subscribe_namespace.track_namespace_prefix,
+                         /*allow_empty=*/true));
   if (!reader.ReadVarInt62(&raw_option)) {
     return absl::InvalidArgumentError("SUBSCRIBE_NAMESPACE option missing");
   }
@@ -1020,14 +1025,16 @@ absl::StatusOr<MoqtObjectAck> MoqtControlMessageParser::ProcessObjectAck(
 }
 
 absl::Status MoqtControlMessageParser::ReadTrackNamespace(
-    quic::QuicDataReader& reader, TrackNamespace& track_namespace) const {
+    quic::QuicDataReader& reader, TrackNamespace& track_namespace,
+    bool allow_empty) const {
   QUICHE_DCHECK(track_namespace.empty());
   uint64_t num_elements;
   if (!reader.ReadVarInt62(&num_elements)) {
     return absl::InvalidArgumentError(
         "Unable to parse the number of namespace elements");
   }
-  if (num_elements == 0 || num_elements > kMaxNamespaceElements) {
+  if ((num_elements == 0 && !allow_empty) ||
+      num_elements > kMaxNamespaceElements) {
     return absl::InvalidArgumentError("Invalid number of namespace elements");
   }
   absl::FixedArray<absl::string_view> elements(num_elements);
@@ -1410,6 +1417,12 @@ void MoqtDataParser::ParseNextItemFromStream() {
     }
 
     case kObjectId: {
+#if defined(QUICHE_MOQ_TRACE)
+      if (!trace_object_start_ns_.has_value()) {
+        trace_object_start_ns_ = quic_trace::detail::now_ns();
+        trace_object_start_offset_ = stream_.ReadOffset();
+      }
+#endif
       std::optional<uint64_t> value_read = ReadVarInt62NoFin();
       if (value_read.has_value()) {
         if (type_.IsFetch() ||
@@ -1449,6 +1462,9 @@ void MoqtDataParser::ParseNextItemFromStream() {
         if (metadata_.payload_length > 0) {
           metadata_.object_status = MoqtObjectStatus::kNormal;
           next_input_ = kData;
+#if defined(QUICHE_MOQ_TRACE)
+          TraceObjectHeader();
+#endif
         } else {
           next_input_ = type_.IsFetch() ? kSerializationFlags : kStatus;
         }
@@ -1474,7 +1490,13 @@ void MoqtDataParser::ParseNextItemFromStream() {
         // spec. Don't bother to signal this for now; just ignore that the
         // stream was supposed to conclude with kEndOfGroup and end it with the
         // encoded status instead.
+#if defined(QUICHE_MOQ_TRACE)
+        TraceObjectHeader();
+#endif
         visitor_.OnObjectMessage(metadata_, "", /*end_of_message=*/true);
+#if defined(QUICHE_MOQ_TRACE)
+        visitor_.OnObjectPayloadConsumed(0, /*end_of_message=*/true);
+#endif
         next_input_ = AdvanceParserState();
       }
       if (fin_read) {
@@ -1522,7 +1544,11 @@ void MoqtDataParser::ParseNextItemFromStream() {
             ++num_objects_read_;
             next_input_ = AdvanceParserState();
           }
-          if (stream_.SkipBytes(chunk_size) && !no_more_data_) {
+          bool reached_fin = stream_.SkipBytes(chunk_size);
+#if defined(QUICHE_MOQ_TRACE)
+          visitor_.OnObjectPayloadConsumed(chunk_size, done);
+#endif
+          if (reached_fin && !no_more_data_) {
             // Although there was no FIN, SkipBytes() can return true if the
             // stream is reset, probably because OnObjectMessage() caused
             // something to happen to the stream or the session.
@@ -1561,6 +1587,18 @@ void MoqtDataParser::ParseNextItemFromStream() {
   }
 }
 
+#if defined(QUICHE_MOQ_TRACE)
+void MoqtDataParser::TraceObjectHeader() {
+  if (!trace_object_start_ns_.has_value()) {
+    return;
+  }
+  visitor_.OnObjectHeader(metadata_, *trace_object_start_ns_,
+                          trace_object_start_offset_,
+                          quic_trace::detail::now_ns(), stream_.ReadOffset());
+  trace_object_start_ns_.reset();
+}
+#endif
+
 void MoqtDataParser::ReadAllData() {
   ReadDataUntil(+[]() { return false; });
 }
@@ -1584,6 +1622,9 @@ bool MoqtDataParser::CheckForFinWithoutData() {
     if (next_input_ == kAwaitingNextByte) {
       // Data arrived; the last object was not EndOfGroup.
       visitor_.OnObjectMessage(metadata_, "", /*end_of_message=*/true);
+#if defined(QUICHE_MOQ_TRACE)
+      visitor_.OnObjectPayloadConsumed(0, /*end_of_message=*/true);
+#endif
       next_input_ = AdvanceParserState();
       ++num_objects_read_;
     }
@@ -1601,6 +1642,9 @@ bool MoqtDataParser::CheckForFinWithoutData() {
   if (next_input_ == kAwaitingNextByte) {
     metadata_.object_status = MoqtObjectStatus::kEndOfGroup;
     visitor_.OnObjectMessage(metadata_, "", /*end_of_message=*/true);
+#if defined(QUICHE_MOQ_TRACE)
+    visitor_.OnObjectPayloadConsumed(0, /*end_of_message=*/true);
+#endif
   }
   visitor_.OnFin();
   return stream_.SkipBytes(0);

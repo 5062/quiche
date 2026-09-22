@@ -405,6 +405,44 @@ TEST_F(MoqtRelayTrackPublisherTest, DuplicateObjectChangedMetadata) {
   EXPECT_TRUE(track_deleted_);
 }
 
+// The status of an object that arrives in fragments is only known once the last
+// fragment arrives, because the end of a group is signaled by the stream FIN.
+// A partial object must not be compared against the final status, and it must
+// not advance the track state before it is complete.
+TEST_F(MoqtRelayTrackPublisherTest, FragmentedObjectStatusIsKnownAtTheEnd) {
+  EXPECT_CALL(*session_, Subscribe).WillOnce(testing::Return(true));
+  publisher_.AddObjectListener(&listener_);
+  Location location = kLargestLocation.Next();
+  EXPECT_CALL(listener_, OnNewObjectAvailable(location, Optional(0),
+                                              /*publisher_priority=*/128));
+  EXPECT_CALL(listener_, OnTrackPublisherGone).Times(0);
+  publisher_.OnObjectFragment(
+      kTrackName,
+      PublishedObjectMetadata{location, 0, "", MoqtObjectStatus::kNormal, 128,
+                              6},
+      "obj", /*offset=*/0);
+  // Nothing is complete yet, so no track state is known.
+  EXPECT_EQ(publisher_.largest_location(), std::nullopt);
+
+  EXPECT_CALL(listener_, OnNewObjectAvailable(location, Optional(0),
+                                              /*publisher_priority=*/128));
+  publisher_.OnObjectFragment(
+      kTrackName,
+      PublishedObjectMetadata{location, 0, "", MoqtObjectStatus::kEndOfGroup,
+                              128, 6},
+      "ect", /*offset=*/3);
+  EXPECT_FALSE(track_deleted_);
+  EXPECT_EQ(publisher_.largest_location(), location);
+  std::optional<PublishedObject> object =
+      publisher_.GetCachedObject(location.group, 0, location.object);
+  ASSERT_TRUE(object.has_value());
+  std::string payload;
+  for (const auto& slice : object->payload) {
+    payload += slice.AsStringView();
+  }
+  EXPECT_EQ(payload, "object");
+}
+
 TEST_F(MoqtRelayTrackPublisherTest, DuplicateObjectChangedPayload) {
   EXPECT_CALL(*session_, Subscribe).WillOnce(testing::Return(true));
   publisher_.AddObjectListener(&listener_);

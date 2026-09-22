@@ -17,6 +17,10 @@
 #include "quiche/quic/platform/api/quic_server_stats.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
+
 namespace quic {
 
 QuicPacketReader::QuicPacketReader()
@@ -61,8 +65,22 @@ bool QuicPacketReader::ReadAndDispatchPackets(
   QUIC_CODE_COUNT(quic_record_tos_byte);
   // Note ToS bit will also populate ECN codepoint.
   info_bits.Set(QuicUdpPacketInfoBit::TOS);
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
+#endif
   size_t packets_read =
       socket_api_.ReadMultiplePackets(fd, info_bits, &read_results_);
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::SocketStats trace_stats;
+  trace_stats.buffers = read_results_.size();
+  trace_stats.datagrams = packets_read;
+  for (size_t i = 0; i < packets_read; ++i) {
+    if (read_results_[i].ok) {
+      trace_stats.bytes += read_results_[i].packet_buffer.buffer_len;
+    }
+  }
+  trace_socket.finish(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS, trace_stats);
+#endif
   if (GetQuicReloadableFlag(quic_move_clock_now)) {
     QUIC_CODE_COUNT(quic_move_clock_now);
     now = clock.Now();

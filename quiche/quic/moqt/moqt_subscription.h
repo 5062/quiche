@@ -86,6 +86,14 @@ class QUICHE_EXPORT SessionToPublisherInterface {
   virtual void PublishIsDone(uint64_t request_id) = 0;
   // Returns nullptr if MoqtSession is closing.
   virtual webtransport::Session* session() = 0;
+#if defined(QUICHE_MOQ_TRACE)
+  // Process-local identities of the session that owns this subscription, used
+  // to correlate forwarded copies with the transport that carries them.
+  virtual std::optional<uint64_t> TraceSessionId() const { return std::nullopt; }
+  virtual std::optional<uint64_t> TraceConnectionId() const {
+    return std::nullopt;
+  }
+#endif
 };
 
 // State for delivery of objects via a subscription, whether initiated by a
@@ -139,6 +147,14 @@ class SubscriptionPublisher : public MoqtObjectListener,
     return visitor_->alternate_delivery_timeout();
   }
   const quic::QuicClock* clock() override { return clock_; }
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<uint64_t> TraceSessionId() const override {
+    return visitor_->TraceSessionId();
+  }
+  std::optional<uint64_t> TraceConnectionId() const override {
+    return visitor_->TraceConnectionId();
+  }
+#endif
   quic::QuicTimeDelta delivery_timeout() override {
     return std::min(
         parameters_.delivery_timeout.value_or(kDefaultDeliveryTimeout),

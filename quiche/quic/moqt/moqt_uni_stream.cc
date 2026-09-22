@@ -5,6 +5,7 @@
 #include "quiche/quic/moqt/moqt_uni_stream.h"
 
 #include <cstdint>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -37,6 +38,12 @@
 
 namespace moqt {
 
+#if defined(QUICHE_MOQ_TRACE)
+namespace {
+std::atomic<uint64_t> next_trace_logical_object{1};
+}  // namespace
+#endif
+
 void OutgoingUniStream::UpdatePriority(MoqtPriority subscriber_priority) {
   priority_.send_order = UpdateSendOrderForSubscriberPriority(
       priority_.send_order, subscriber_priority);
@@ -55,8 +62,20 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
   header.object_status = object.metadata.status;
   header.payload_length = object.metadata.payload_length;
 
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<moq_trace::ObjectPhase> header_phase;
+  if (trace_object_.has_value()) {
+    header_phase.emplace(
+        trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_HEADER_ENCODE));
+  }
+#endif
   quiche::QuicheBuffer serialized_header =
       framer_.SerializeObjectHeader(header, type, last_object_);
+#if defined(QUICHE_MOQ_TRACE)
+  if (header_phase.has_value()) {
+    header_phase->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+  }
+#endif
   std::vector<quiche::QuicheMemSlice> write_vector;
   write_vector.reserve(object.payload.size() + 1);
   write_vector.push_back(quiche::QuicheMemSlice(std::move(serialized_header)));
@@ -65,8 +84,24 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
   }
   webtransport::StreamWriteOptions options;
   options.set_send_fin(!type.IsFetch() && object.fin_after_this);
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<moq_trace::ObjectPhase> write_phase;
+  if (trace_object_.has_value()) {
+    write_phase.emplace(
+        trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE));
+  }
+#endif
   absl::Status write_status =
       stream_.Writev(absl::MakeSpan(write_vector), options);
+#if defined(QUICHE_MOQ_TRACE)
+  if (trace_object_.has_value()) {
+    trace_object_->set_stream_offset_end(stream_.WriteOffset());
+  }
+  if (write_phase.has_value()) {
+    write_phase->finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                          : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+  }
+#endif
   if (!write_status.ok()) {
     QUICHE_BUG(MoqtSession_WriteObjectToStream_write_failed)
         << "Writing into MoQT stream failed despite CanWrite being true "
@@ -139,6 +174,9 @@ void OutgoingSubgroupStream::SendObjects() {
     return;
   }
   while (stream().CanWrite()) {
+#if defined(QUICHE_MOQ_TRACE)
+    const uint64_t clone_start_ns = quic_trace::detail::now_ns();
+#endif
     std::optional<PublishedObject> object = publisher_->GetCachedObject(
         index_.group, index_.subgroup, next_object_, already_delivered_);
     if (!object.has_value()) {
@@ -151,6 +189,26 @@ void OutgoingSubgroupStream::SendObjects() {
     }
     QUICHE_DCHECK_EQ(object->metadata.location.group, index_.group);
     QUICHE_DCHECK(object->metadata.subgroup == index_.subgroup);
+#if defined(QUICHE_MOQ_TRACE)
+    if (already_delivered_ == 0 && object->metadata.trace_logical_id.has_value()) {
+      moq_trace::ObjectContext context;
+      context.logical_id = *object->metadata.trace_logical_id;
+      context.identity = moq_trace::ObjectIdentity{
+          track_alias_, object->metadata.location.group,
+          object->metadata.location.object};
+      context.direction = QUIC_TRACE_DIRECTION_TX;
+      context.session_id = visitor->TraceSessionId();
+      context.connection_id = visitor->TraceConnectionId();
+      context.stream_id = stream().GetStreamId();
+      context.stream_offset_start = stream().WriteOffset();
+      context.start_ns = clone_start_ns;
+      context.payload_bytes = object->metadata.payload_length;
+      trace_object().emplace(context);
+      auto clone = trace_object()->phase_at(MOQ_TRACE_OBJECT_PHASE_CLONE,
+                                            clone_start_ns);
+      clone.finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+    }
+#endif
     if (!visitor->InWindow(object->metadata.location)) {
       // It is possible that the next object became irrelevant due to a
       // REQUEST_UPDATE.  Close the stream if so.
@@ -192,8 +250,25 @@ void OutgoingSubgroupStream::SendObjects() {
       }
       webtransport::StreamWriteOptions options;
       options.set_send_fin(object->fin_after_this);
+#if defined(QUICHE_MOQ_TRACE)
+      std::optional<moq_trace::ObjectPhase> write_phase;
+      if (trace_object().has_value()) {
+        write_phase.emplace(
+            trace_object()->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE));
+      }
+#endif
       absl::Status write_status =
           stream().Writev(absl::MakeSpan(object->payload), options);
+#if defined(QUICHE_MOQ_TRACE)
+      if (trace_object().has_value()) {
+        trace_object()->set_stream_offset_end(stream().WriteOffset());
+      }
+      if (write_phase.has_value()) {
+        write_phase->finish(write_status.ok()
+                                ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+      }
+#endif
       if (!write_status.ok()) {
         QUICHE_BUG(MoqtSession_WriteObjectToStream_write_failed)
             << "Writing into MoQT stream failed despite CanWrite() being true "
@@ -216,6 +291,12 @@ void OutgoingSubgroupStream::SendObjects() {
     if (already_delivered_ != last_object()->payload_length) {
       return;
     }
+#if defined(QUICHE_MOQ_TRACE)
+    if (trace_object().has_value()) {
+      trace_object()->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+      trace_object().reset();
+    }
+#endif
     ++next_object_;
     already_delivered_ = 0;
     if (object->fin_after_this && !delivery_timeout.IsInfinite() &&
@@ -365,6 +446,13 @@ IncomingDataStream::~IncomingDataStream() {
 void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
                                          absl::string_view payload,
                                          bool end_of_message) {
+#if defined(QUICHE_MOQ_TRACE)
+  trace_fragment_succeeded_ = false;
+  if (trace_object_.has_value() && !payload.empty()) {
+    trace_payload_phase_.emplace(
+        trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ));
+  }
+#endif
   QUICHE_DVLOG(1) << "Received OBJECT message on stream "
                   << stream_->GetStreamId() << " for track alias "
                   << message.track_alias << " with sequence "
@@ -448,8 +536,28 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
       metadata.publisher_priority = message.publisher_priority;
       metadata.payload_length = message.payload_length;
       metadata.arrival_time = clock_->Now();
+#if defined(QUICHE_MOQ_TRACE)
+      metadata.trace_logical_id = trace_logical_id_;
+      std::optional<moq_trace::ObjectPhase> create;
+      std::optional<moq_trace::ObjectPhase> commit;
+      if (trace_object_.has_value() && bytes_received_this_object_ == 0) {
+        create.emplace(trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_CREATE));
+      }
+      if (trace_object_.has_value() && end_of_message) {
+        commit.emplace(
+            trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_FRAME_COMMIT));
+      }
+#endif
       visitor_->OnObjectFragment(track->full_track_name(), metadata, payload,
                                  bytes_received_this_object_);
+#if defined(QUICHE_MOQ_TRACE)
+      if (create.has_value()) {
+        create->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+      }
+      if (commit.has_value()) {
+        commit->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+      }
+#endif
     }
   } else {  // FETCH
     track->OnObjectOrOk();
@@ -473,7 +581,61 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
     bytes_received_this_object_ += payload.size();
   }
   partial_object_.clear();
+#if defined(QUICHE_MOQ_TRACE)
+  trace_fragment_succeeded_ = true;
+#endif
 }
+
+#if defined(QUICHE_MOQ_TRACE)
+void IncomingDataStream::OnObjectHeader(const MoqtObject& message,
+                                        uint64_t start_ns,
+                                        uint64_t start_offset, uint64_t end_ns,
+                                        uint64_t end_offset) {
+  if (IsFetch()) {
+    return;
+  }
+  trace_logical_id_ = moq_trace::LogicalId{
+      next_trace_logical_object.fetch_add(1, std::memory_order_relaxed), 0};
+  moq_trace::ObjectContext context;
+  context.logical_id = *trace_logical_id_;
+  context.identity =
+      moq_trace::ObjectIdentity{message.track_alias, message.group_id,
+                                message.object_id};
+  context.direction = QUIC_TRACE_DIRECTION_RX;
+  context.session_id = session_->TraceSessionId();
+  context.connection_id = session_->TraceConnectionId();
+  context.stream_id = stream_->GetStreamId();
+  context.stream_offset_start = start_offset;
+  context.start_ns = start_ns;
+  context.payload_bytes = message.payload_length;
+  trace_object_.emplace(context);
+  auto header = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_HEADER_PARSE,
+                                        start_ns);
+  header.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, end_ns);
+  trace_object_->set_stream_offset_end(end_offset);
+}
+
+void IncomingDataStream::OnObjectPayloadConsumed(size_t,
+                                                 bool end_of_message) {
+  if (!trace_object_.has_value()) {
+    return;
+  }
+  trace_object_->set_stream_offset_end(stream_->ReadOffset());
+  if (trace_payload_phase_.has_value()) {
+    trace_payload_phase_->finish(trace_fragment_succeeded_
+                                     ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                     : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+    trace_payload_phase_.reset();
+  }
+  if (end_of_message) {
+    trace_object_->finish(trace_fragment_succeeded_
+                              ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                              : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+    trace_object_.reset();
+    trace_logical_id_.reset();
+  }
+}
+#endif
 
 void IncomingDataStream::MaybeReadOneObject() {
   if (!parser_.track_alias().has_value() ||
@@ -562,6 +724,15 @@ void IncomingDataStream::OnCanRead() {
 
 void IncomingDataStream::OnParsingError(MoqtError error_code,
                                         absl::string_view reason) {
+#if defined(QUICHE_MOQ_TRACE)
+  if (trace_object_.has_value()) {
+    trace_object_->set_stream_offset_end(stream_->ReadOffset());
+    trace_object_->finish(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+    trace_object_.reset();
+    trace_payload_phase_.reset();
+    trace_logical_id_.reset();
+  }
+#endif
   session_->Error(error_code, absl::StrCat("Parse error: ", reason));
 }
 

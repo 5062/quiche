@@ -21,6 +21,10 @@
 #include "quiche/common/quiche_cord_utils.h"
 #include "quiche/common/quiche_mem_slice.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <moq_trace/trace.hpp>
+#endif
+
 namespace moqt {
 
 struct PublishedObjectMetadata {
@@ -33,6 +37,9 @@ struct PublishedObjectMetadata {
   // present in an encompassing PublishedObject or CachedObject.
   uint64_t payload_length;
   quic::QuicTime arrival_time = quic::QuicTime::Zero();
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<moq_trace::LogicalId> trace_logical_id;
+#endif
   bool IsMalformed(const PublishedObjectMetadata& other) const {
     // It's OK for arrival_time to be different when checking immutables.
     return (location != other.location || subgroup != other.subgroup ||

@@ -57,6 +57,15 @@ class MoqtDataParserVisitor {
   virtual void OnObjectMessage(const MoqtObject& message,
                                absl::string_view payload,
                                bool end_of_message) = 0;
+#if defined(QUICHE_MOQ_TRACE)
+  // Optional object instrumentation callbacks. A visitor that does not measure
+  // objects, including the parser's own test double, keeps the empty default.
+  virtual void OnObjectHeader(const MoqtObject& /*message*/,
+                              uint64_t /*start_ns*/, uint64_t /*start_offset*/,
+                              uint64_t /*end_ns*/, uint64_t /*end_offset*/) {}
+  virtual void OnObjectPayloadConsumed(size_t /*bytes*/,
+                                       bool /*end_of_message*/) {}
+#endif
   virtual void OnFin() = 0;
 
   virtual void OnParsingError(MoqtError code, absl::string_view reason) = 0;
@@ -234,7 +243,8 @@ class MoqtControlMessageParser {
   // Reads a TrackNamespace from the reader. Returns false if the namespace is
   // too large. Sets a ParseError if the namespace is malformed.
   absl::Status ReadTrackNamespace(quic::QuicDataReader& reader,
-                                  TrackNamespace& track_namespace) const;
+                                  TrackNamespace& track_namespace,
+                                  bool allow_empty = false) const;
   // Reads a FullTrackName from the reader. Returns false if the name is too
   // large. Sets a ParseError if the name is malformed.
   absl::Status ReadFullTrackName(quic::QuicDataReader& reader,
@@ -349,6 +359,9 @@ class QUICHE_EXPORT MoqtDataParser {
   bool CheckForFinWithoutData();
 
   void ParseError(absl::string_view reason);
+#if defined(QUICHE_MOQ_TRACE)
+  void TraceObjectHeader();
+#endif
 
   webtransport::Stream& stream_;
   MoqtDataParserVisitor& visitor_;
@@ -368,6 +381,11 @@ class QUICHE_EXPORT MoqtDataParser {
   std::optional<uint64_t> last_object_id_;
   size_t payload_length_remaining_ = 0;
   size_t num_objects_read_ = 0;
+
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<uint64_t> trace_object_start_ns_;
+  uint64_t trace_object_start_offset_ = 0;
+#endif
 
   bool processing_ = false;  // True if currently in ProcessData(), to prevent
                              // re-entrancy.

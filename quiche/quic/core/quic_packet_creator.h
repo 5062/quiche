@@ -136,6 +136,12 @@ class QUICHE_EXPORT QuicPacketCreator {
 
   ~QuicPacketCreator();
 
+#if defined(QUICHE_MOQ_TRACE)
+  void set_moq_trace_connection_id(uint64_t connection_id) {
+    moq_trace_connection_id_ = connection_id;
+  }
+#endif
+
   // SetDiversificationNonce sets the nonce that will be sent in each public
   // header of packets encrypted at the initial encryption level. Should only
   // be called by servers.
@@ -757,6 +763,10 @@ class QUICHE_EXPORT QuicPacketCreator {
 
   // If true, the current packet should append 0xc813 to end of the datagram.
   bool append_scone_indicator_ = false;
+
+#if defined(QUICHE_MOQ_TRACE)
+  uint64_t moq_trace_connection_id_ = 0;
+#endif
 };
 
 }  // namespace quic

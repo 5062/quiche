@@ -101,6 +101,10 @@
 #include "quiche/common/platform/api/quiche_logging.h"
 #include "quiche/common/quiche_buffer_allocator.h"
 #include "quiche/common/quiche_circular_deque.h"
+
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
 #include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
@@ -915,6 +919,12 @@ class QUICHE_EXPORT QuicConnection
     return default_path_.server_connection_id;
   }
 
+#if defined(QUICHE_MOQ_TRACE)
+  uint64_t moq_trace_connection_id() const {
+    return moq_trace_connection_id_;
+  }
+#endif
+
   const QuicConnectionId& client_connection_id() const {
     return default_path_.client_connection_id;
   }
@@ -1611,6 +1621,9 @@ class QUICHE_EXPORT QuicConnection
   }
 
  private:
+#if defined(QUICHE_MOQ_TRACE)
+  void FinishMoqTracePacket(quic_trace_packet_outcome outcome);
+#endif
   friend class test::QuicConnectionPeer;
 
   enum RetransmittableOnWireBehavior : uint8_t {
@@ -2473,6 +2486,14 @@ class QUICHE_EXPORT QuicConnection
 
   // Tracks if the connection was created by the server or the client.
   Perspective perspective_;
+
+#if defined(QUICHE_MOQ_TRACE)
+  const uint64_t moq_trace_connection_id_;
+  std::optional<quic_trace::Packet> moq_trace_rx_packet_;
+  std::optional<quic_trace::PacketPhase> moq_trace_rx_header_parse_;
+  std::optional<quic_trace::PacketPhase> moq_trace_rx_header_unprotect_;
+  std::optional<quic_trace::PacketPhase> moq_trace_rx_payload_decrypt_;
+#endif
 
   // The ECN codepoint of the last packet to be sent to the writer, which
   // might be different from the next codepoint in per_packet_options_.

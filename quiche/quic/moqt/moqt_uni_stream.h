@@ -33,6 +33,10 @@
 #include "quiche/common/quiche_weak_ptr.h"
 #include "quiche/web_transport/web_transport.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <moq_trace/trace.hpp>
+#endif
+
 namespace moqt {
 
 namespace test {
@@ -73,6 +77,9 @@ class OutgoingUniStream : public webtransport::StreamVisitor {
   void set_last_object(PublishedObjectMetadata metadata) {
     last_object_ = std::move(metadata);
   }
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<moq_trace::Object>& trace_object() { return trace_object_; }
+#endif
 
   // Writes an object to the stream. Returns false if the write failed. The
   // caller should reset the stream if that happens.
@@ -87,6 +94,9 @@ class OutgoingUniStream : public webtransport::StreamVisitor {
   // Used to compute the object ID diff and pass metadata for partial objects.
   // If nullopt, the stream header has not been written yet.
   std::optional<PublishedObjectMetadata> last_object_;
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<moq_trace::Object> trace_object_;
+#endif
 };
 
 // This interface provides information about the subscription.
@@ -104,6 +114,12 @@ class SubscriptionPublisherInterface {
   virtual void OnSubgroupAbandoned(uint64_t group, uint64_t subgroup,
                                    webtransport::StreamErrorCode) = 0;
   virtual void OnDataStreamDestroyed(DataStreamIndex) = 0;
+#if defined(QUICHE_MOQ_TRACE)
+  virtual std::optional<uint64_t> TraceSessionId() const { return std::nullopt; }
+  virtual std::optional<uint64_t> TraceConnectionId() const {
+    return std::nullopt;
+  }
+#endif
 };
 
 // This is for subscriptions only. FETCH uses its own construct.
@@ -204,6 +220,12 @@ class SessionToUniStreamInterface {
       uint64_t track_alias) = 0;
   virtual quiche::QuicheWeakPtr<RemoteTrack> GetFetch(uint64_t request_id) = 0;
   virtual void Error(MoqtError error_code, absl::string_view reason) = 0;
+#if defined(QUICHE_MOQ_TRACE)
+  virtual std::optional<uint64_t> TraceSessionId() const { return std::nullopt; }
+  virtual std::optional<uint64_t> TraceConnectionId() const {
+    return std::nullopt;
+  }
+#endif
 };
 
 class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
@@ -230,6 +252,12 @@ class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
   // TODO: Handle a stream FIN.
   void OnObjectMessage(const MoqtObject& message, absl::string_view payload,
                        bool end_of_message) override;
+#if defined(QUICHE_MOQ_TRACE)
+  void OnObjectHeader(const MoqtObject& message, uint64_t start_ns,
+                      uint64_t start_offset, uint64_t end_ns,
+                      uint64_t end_offset) override;
+  void OnObjectPayloadConsumed(size_t bytes, bool end_of_message) override;
+#endif
   void OnFin() override { fin_received_ = true; }
   void OnParsingError(MoqtError error_code, absl::string_view reason) override;
 
@@ -257,6 +285,12 @@ class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
   uint64_t bytes_received_this_object_ = 0;
   SessionToUniStreamInterface* session_;
   const quic::QuicClock* absl_nonnull clock_;
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<moq_trace::Object> trace_object_;
+  std::optional<moq_trace::ObjectPhase> trace_payload_phase_;
+  std::optional<moq_trace::LogicalId> trace_logical_id_;
+  bool trace_fragment_succeeded_ = false;
+#endif
 };
 
 }  // namespace moqt

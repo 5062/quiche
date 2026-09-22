@@ -48,6 +48,10 @@
 #include "quiche/common/quiche_weak_ptr.h"
 #include "quiche/web_transport/web_transport.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <moq_trace/trace.hpp>
+#endif
+
 namespace moqt {
 
 namespace test {
@@ -147,6 +151,14 @@ class QUICHE_EXPORT MoqtSession : public MoqtSessionInterface,
   webtransport::Session* session() override {
     return is_closing_ ? nullptr : session_;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<uint64_t> TraceSessionId() const override {
+    return trace_session_id_;
+  }
+  std::optional<uint64_t> TraceConnectionId() const override {
+    return session_->TraceConnectionId();
+  }
+#endif
 
   // SessionToUniStreamInterface implementation.
   bool deliver_partial_objects() const {
@@ -475,6 +487,9 @@ class QUICHE_EXPORT MoqtSession : public MoqtSessionInterface,
   bool received_goaway_ = false;
 
   MoqtTraceRecorder trace_recorder_;
+#if defined(QUICHE_MOQ_TRACE)
+  const uint64_t trace_session_id_ = moq_trace::next_session_id();
+#endif
 
   // Upstream SUBSCRIBE state.
   // Upstream SUBSCRIBEs and FETCHes, indexed by subscribe_id. Do not erase

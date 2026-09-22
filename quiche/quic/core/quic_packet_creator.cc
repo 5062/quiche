@@ -40,6 +40,10 @@
 #include "quiche/quic/platform/api/quic_server_stats.h"
 #include "quiche/common/print_elements.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
+
 namespace quic {
 namespace {
 
@@ -66,6 +70,35 @@ void LogCoalesceStreamFrameStatus(bool success) {
   QUIC_HISTOGRAM_BOOL("QuicSession.CoalesceStreamFrameStatus", success,
                       "Success rate of coalesing stream frames attempt.");
 }
+
+#if defined(QUICHE_MOQ_TRACE)
+quic_trace_packet_space TracePacketSpace(EncryptionLevel level) {
+  switch (level) {
+    case ENCRYPTION_INITIAL:
+      return QUIC_TRACE_PACKET_SPACE_INITIAL;
+    case ENCRYPTION_HANDSHAKE:
+      return QUIC_TRACE_PACKET_SPACE_HANDSHAKE;
+    case ENCRYPTION_ZERO_RTT:
+      return QUIC_TRACE_PACKET_SPACE_ZERO_RTT;
+    case ENCRYPTION_FORWARD_SECURE:
+      return QUIC_TRACE_PACKET_SPACE_DATA;
+    default:
+      return QUIC_TRACE_PACKET_SPACE_DATA;
+  }
+}
+
+void TraceStreamFrames(quic_trace::Packet& packet, const QuicFrames& frames) {
+  for (const QuicFrame& frame : frames) {
+    if (frame.type != STREAM_FRAME || frame.stream_frame.data_length == 0) {
+      continue;
+    }
+    packet.stream_frame(
+        frame.stream_frame.stream_id, frame.stream_frame.offset,
+        frame.stream_frame.offset + frame.stream_frame.data_length,
+        QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  }
+}
+#endif
 
 // ScopedPacketContextSwitcher saves |packet|'s states and change states
 // during its construction. When the switcher goes out of scope, it restores
@@ -594,6 +627,18 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
   // Write out the packet header
   QuicPacketHeader header;
   FillPacketHeader(&header);
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::PacketContext trace_context;
+  trace_context.connection_id = moq_trace_connection_id_;
+  trace_context.direction = QUIC_TRACE_DIRECTION_TX;
+  trace_context.packet_number = packet_.packet_number.ToUint64();
+  trace_context.packet_space = TracePacketSpace(packet_.encryption_level);
+  std::optional<quic_trace::Packet> trace_packet;
+  trace_packet.emplace(trace_context);
+  std::optional<quic_trace::PacketPhase> trace_encode;
+  trace_encode.emplace(
+      trace_packet->phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE));
+#endif
   packet_.fate = delegate_->GetSerializedPacketFate(
       /*is_mtu_discovery=*/false, packet_.encryption_level);
   QUIC_DVLOG(1) << ENDPOINT << "fate of packet " << packet_.packet_number
@@ -686,6 +731,13 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
 
   packet_.transmission_type = transmission_type;
 
+#if defined(QUICHE_MOQ_TRACE)
+  trace_encode->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  std::optional<quic_trace::PacketPhase> trace_encrypt;
+  trace_encrypt.emplace(
+      trace_packet->phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT));
+#endif
+
   QUICHE_DCHECK(packet_.encryption_level == ENCRYPTION_FORWARD_SECURE ||
                 packet_.encryption_level == ENCRYPTION_ZERO_RTT)
       << ENDPOINT << packet_.encryption_level;
@@ -696,6 +748,10 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
       writer.length() - scone_length, kMaxOutgoingPacketSize,
       encrypted_buffer + scone_length);
   if (encrypted_length == 0) {
+#if defined(QUICHE_MOQ_TRACE)
+    trace_encrypt->finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+    trace_packet->finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+#endif
     QUIC_BUG(quic_bug_10752_13)
         << ENDPOINT << "Failed to encrypt packet number "
         << header.packet_number;
@@ -712,6 +768,14 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
   packet_.release_encrypted_buffer = std::move(packet_buffer).release_buffer;
 
   packet_.retransmittable_frames.push_back(QuicFrame(frame));
+#if defined(QUICHE_MOQ_TRACE)
+  trace_encrypt->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  trace_packet->set_byte_len(encrypted_length);
+  trace_packet->stream_frame(frame.stream_id, frame.offset,
+                             frame.offset + frame.data_length,
+                             QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  trace_packet->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+#endif
   OnSerializedPacket();
 }
 
@@ -822,6 +886,18 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   QuicPacketHeader header;
   // FillPacketHeader increments packet_number_.
   FillPacketHeader(&header);
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::PacketContext trace_context;
+  trace_context.connection_id = moq_trace_connection_id_;
+  trace_context.direction = QUIC_TRACE_DIRECTION_TX;
+  trace_context.packet_number = packet_.packet_number.ToUint64();
+  trace_context.packet_space = TracePacketSpace(packet_.encryption_level);
+  std::optional<quic_trace::Packet> trace_packet;
+  trace_packet.emplace(trace_context);
+  std::optional<quic_trace::PacketPhase> trace_encode;
+  trace_encode.emplace(
+      trace_packet->phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE));
+#endif
   if (packet_.encryption_level == ENCRYPTION_INITIAL) {
     packet_.initial_header = header;
   }
@@ -884,6 +960,10 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   }
 
   if (length == 0) {
+#if defined(QUICHE_MOQ_TRACE)
+    trace_encode->finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+    trace_packet->finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+#endif
     QUIC_BUG(quic_bug_10752_16)
         << ENDPOINT << "Failed to serialize "
         << QuicFramesToString(queued_frames_)
@@ -909,12 +989,22 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   if (!possibly_truncated_by_length) {
     QUICHE_DCHECK_EQ(packet_size_, length) << ENDPOINT;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  trace_encode->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  std::optional<quic_trace::PacketPhase> trace_encrypt;
+  trace_encrypt.emplace(
+      trace_packet->phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT));
+#endif
   const size_t encrypted_length = framer_->EncryptInPlace(
       packet_.encryption_level, packet_.packet_number,
       GetStartOfEncryptedData(framer_->transport_version(), header), length,
       encrypted_buffer_len - scone_length,
       encrypted_buffer.buffer + scone_length);
   if (encrypted_length == 0) {
+#if defined(QUICHE_MOQ_TRACE)
+    trace_encrypt->finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+    trace_packet->finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+#endif
     QUIC_BUG(quic_bug_10752_17)
         << ENDPOINT << "Failed to encrypt packet number "
         << packet_.packet_number;
@@ -924,6 +1014,13 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   packet_size_ = 0;
   packet_.encrypted_buffer = encrypted_buffer.buffer;
   packet_.encrypted_length = encrypted_length + scone_length;
+
+#if defined(QUICHE_MOQ_TRACE)
+  trace_encrypt->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  trace_packet->set_byte_len(packet_.encrypted_length);
+  TraceStreamFrames(*trace_packet, queued_frames_);
+  trace_packet->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+#endif
 
   encrypted_buffer.buffer = nullptr;
   packet_.release_encrypted_buffer = std::move(encrypted_buffer).release_buffer;

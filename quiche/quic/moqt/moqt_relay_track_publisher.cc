@@ -184,7 +184,16 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     }
   }
   if (duplicate_object != nullptr) {
-    if (metadata.IsMalformed(duplicate_object->metadata())) {
+    PublishedObjectMetadata known = duplicate_object->metadata();
+    if (known.payload_length > duplicate_object->payload_received()) {
+      // A partial object reports kNormal until its last fragment arrives,
+      // because the wire format only reveals the end of a group through the
+      // stream FIN. That placeholder says nothing about the finished object, so
+      // it must not be compared against a fragment that carries the final
+      // status.
+      known.status = metadata.status;
+    }
+    if (metadata.IsMalformed(known)) {
       // Something besides the arrival time and extension headers changed.
       OnMalformedTrack(full_track_name);
       return;
@@ -199,18 +208,35 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       if (!duplicate_object->Append(offset, object)) {
         return;
       }
-      // Data added to the object. Notify listeners.
-      for (MoqtObjectListener* listener : listeners_) {
-        listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
-                                       metadata.publisher_priority);
+      if (duplicate_object->payload_received() <
+          duplicate_object->metadata().payload_length) {
+        // Data added to the object, which is still incomplete. Notify
+        // listeners, but do not treat the placeholder status of an unfinished
+        // object as track state.
+        for (MoqtObjectListener* listener : listeners_) {
+          listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
+                                         metadata.publisher_priority);
+        }
+        return;
       }
+      // The object is now complete, so its status is meaningful. Update state
+      // below with the fragment that finished the object.
+    } else {
+      // No need to update state.
       return;
     }
-
-    // No need to update state.
+  }
+  // The object is valid and complete. Update state.
+  if (duplicate_object == nullptr && metadata.payload_length > object.length()) {
+    // Only a fragment of a new object arrived. The status of a partial object
+    // is a placeholder that the final fragment can still change, so track state
+    // must not advance until the payload is complete.
+    for (MoqtObjectListener* listener : listeners_) {
+      listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
+                                     metadata.publisher_priority);
+    }
     return;
   }
-  // Object is valid. Update state.
   if (next_location_ <= metadata.location) {
     next_location_ = metadata.location.Next();
   }

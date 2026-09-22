@@ -8,6 +8,7 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -105,6 +106,12 @@
 
 namespace quic {
 
+#if defined(QUICHE_MOQ_TRACE)
+namespace {
+std::atomic<uint64_t> next_moq_trace_connection_id{1};
+}  // namespace
+#endif
+
 class QuicDecrypter;
 class QuicEncrypter;
 
@@ -120,6 +127,22 @@ const size_t kMaxReceivedClientAddressSize = 20;
 // marked packet is acked. Avoids abandoning ECN because of one burst loss,
 // but doesn't allow multiple RTTs of user delay in the hope of using ECN.
 const uint8_t kEcnPtoLimit = 2;
+
+#if defined(QUICHE_MOQ_TRACE)
+quic_trace_packet_space TracePacketSpace(EncryptionLevel level) {
+  switch (level) {
+    case ENCRYPTION_INITIAL:
+      return QUIC_TRACE_PACKET_SPACE_INITIAL;
+    case ENCRYPTION_HANDSHAKE:
+      return QUIC_TRACE_PACKET_SPACE_HANDSHAKE;
+    case ENCRYPTION_ZERO_RTT:
+      return QUIC_TRACE_PACKET_SPACE_ZERO_RTT;
+    case ENCRYPTION_FORWARD_SECURE:
+    default:
+      return QUIC_TRACE_PACKET_SPACE_DATA;
+  }
+}
+#endif
 
 // Constant representing a 7/8 probability of enabling the spin bit for each
 // direction of communication. Since the spin bit only works when both sides
@@ -234,6 +257,10 @@ QuicConnection::QuicConnection(
       connection_id_generator_(generator),
       received_client_addresses_cache_(kMaxReceivedClientAddressSize),
       perspective_(perspective),
+#if defined(QUICHE_MOQ_TRACE)
+      moq_trace_connection_id_(next_moq_trace_connection_id.fetch_add(
+          1, std::memory_order_relaxed)),
+#endif
       owns_writer_(owns_writer),
       can_truncate_connection_ids_(perspective == Perspective::IS_SERVER),
       store_one_dcid_(GetQuicReloadableFlag(quic_one_dcid)),
@@ -250,6 +277,9 @@ QuicConnection::QuicConnection(
       << "QuicConnection: attempted to use server connection ID "
       << server_connection_id << " which is invalid with version " << version();
   framer_.set_visitor(this);
+#if defined(QUICHE_MOQ_TRACE)
+  packet_creator_.set_moq_trace_connection_id(moq_trace_connection_id_);
+#endif
   stats_.connection_creation_time = clock_->ApproximateNow();
   // TODO(ianswett): Supply the NetworkChangeVisitor as a constructor argument
   // and make it required non-null, because it's always used.
@@ -821,6 +851,12 @@ QuicBandwidth QuicConnection::ApplicationDrivenPacingRate() const {
 }
 
 void QuicConnection::OnError(QuicFramer* framer) {
+#if defined(QUICHE_MOQ_TRACE)
+  FinishMoqTracePacket(
+      framer->error() == QUIC_DECRYPTION_FAILURE
+          ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
+          : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
+#endif
   // Packets that we can not or have not decrypted are dropped.
   // TODO(rch): add stats to measure this.
   if (!connected_ || !last_received_packet_info_.decrypted) {
@@ -832,6 +868,15 @@ void QuicConnection::OnError(QuicFramer* framer) {
 
 void QuicConnection::OnPacket() {
   last_received_packet_info_.decrypted = false;
+#if defined(QUICHE_MOQ_TRACE)
+  FinishMoqTracePacket(QUIC_TRACE_PACKET_OUTCOME_ABANDONED);
+  quic_trace::PacketContext context;
+  context.connection_id = moq_trace_connection_id_;
+  context.direction = QUIC_TRACE_DIRECTION_RX;
+  moq_trace_rx_packet_.emplace(context);
+  moq_trace_rx_header_parse_.emplace(
+      moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_HEADER_PARSE));
+#endif
 }
 
 bool QuicConnection::OnProtocolVersionMismatch(
@@ -1027,6 +1072,16 @@ bool QuicConnection::ValidateServerConnectionId(
 
 bool QuicConnection::OnUnauthenticatedPublicHeader(
     const QuicPacketHeader& header) {
+#if defined(QUICHE_MOQ_TRACE)
+  if (moq_trace_rx_header_parse_.has_value()) {
+    moq_trace_rx_header_parse_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    moq_trace_rx_header_parse_.reset();
+  }
+  if (moq_trace_rx_packet_.has_value()) {
+    moq_trace_rx_header_unprotect_.emplace(moq_trace_rx_packet_->phase(
+        QUIC_TRACE_PACKET_PHASE_HEADER_UNPROTECT));
+  }
+#endif
   if (store_one_dcid_) {
     QUIC_RELOADABLE_FLAG_COUNT_N(quic_one_dcid, 2, 3);
     last_received_packet_info_.header.destination_connection_id =
@@ -1115,6 +1170,16 @@ bool QuicConnection::OnUnauthenticatedPublicHeader(
 }
 
 bool QuicConnection::OnUnauthenticatedHeader(const QuicPacketHeader& header) {
+#if defined(QUICHE_MOQ_TRACE)
+  if (moq_trace_rx_header_unprotect_.has_value()) {
+    moq_trace_rx_header_unprotect_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    moq_trace_rx_header_unprotect_.reset();
+  }
+  if (moq_trace_rx_packet_.has_value()) {
+    moq_trace_rx_payload_decrypt_.emplace(
+        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_PAYLOAD_DECRYPT));
+  }
+#endif
   if (debug_visitor_ != nullptr) {
     debug_visitor_->OnUnauthenticatedHeader(header);
   }
@@ -1218,8 +1283,18 @@ void QuicConnection::OnUserAgentIdKnown(const std::string& /*user_agent_id*/) {
   sent_packet_manager_.OnUserAgentIdKnown();
 }
 
-void QuicConnection::OnDecryptedPacket(size_t /*length*/,
+void QuicConnection::OnDecryptedPacket(size_t length,
                                        EncryptionLevel level) {
+#if defined(QUICHE_MOQ_TRACE)
+  if (moq_trace_rx_packet_.has_value()) {
+    moq_trace_rx_packet_->set_byte_len(length);
+    moq_trace_rx_packet_->set_space(TracePacketSpace(level));
+  }
+  if (moq_trace_rx_payload_decrypt_.has_value()) {
+    moq_trace_rx_payload_decrypt_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    moq_trace_rx_payload_decrypt_.reset();
+  }
+#endif
   last_received_packet_info_.decrypted_level = level;
   last_received_packet_info_.decrypted = true;
   if (level == ENCRYPTION_FORWARD_SECURE &&
@@ -1261,6 +1336,12 @@ QuicSocketAddress QuicConnection::GetEffectivePeerAddressFromCurrentPacket()
 }
 
 bool QuicConnection::OnPacketHeader(const QuicPacketHeader& header) {
+#if defined(QUICHE_MOQ_TRACE)
+  if (moq_trace_rx_packet_.has_value() &&
+      header.packet_number.IsInitialized()) {
+    moq_trace_rx_packet_->set_number(header.packet_number.ToUint64());
+  }
+#endif
   if (spin_bit_enabled_ && header.form == IETF_QUIC_SHORT_HEADER_PACKET) {
     QUIC_CODE_COUNT(quic_enable_spin_bit);
     QuicPacketNumber largest_observed =
@@ -1520,7 +1601,27 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
   // MaybeUpdateAckTimeout to a stand-alone function instead of calling them for
   // all frames.
   MaybeUpdateAckTimeout();
+#if defined(QUICHE_MOQ_TRACE)
+  std::optional<quic_trace::PacketPhase> trace_frame_process;
+  if (moq_trace_rx_packet_.has_value()) {
+    trace_frame_process.emplace(
+        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
+  }
+#endif
   visitor_->OnStreamFrame(frame);
+#if defined(QUICHE_MOQ_TRACE)
+  const quic_trace_packet_outcome trace_outcome =
+      connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
+                 : QUIC_TRACE_PACKET_OUTCOME_DROPPED;
+  if (trace_frame_process.has_value()) {
+    trace_frame_process->finish(trace_outcome);
+  }
+  if (moq_trace_rx_packet_.has_value() && frame.data_length != 0) {
+    moq_trace_rx_packet_->stream_frame(
+        frame.stream_id, frame.offset, frame.offset + frame.data_length,
+        trace_outcome);
+  }
+#endif
   stats_.stream_bytes_received += frame.data_length;
   ping_manager_.reset_consecutive_retransmittable_on_wire_count();
   return connected_;
@@ -2354,6 +2455,10 @@ bool QuicConnection::OnBlockedFrame(const QuicBlockedFrame& frame) {
 }
 
 void QuicConnection::OnPacketComplete() {
+#if defined(QUICHE_MOQ_TRACE)
+  FinishMoqTracePacket(connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
+                                  : QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+#endif
   // Don't do anything if this packet closed the connection.
   if (!connected_) {
     ClearLastFrames();
@@ -2388,6 +2493,27 @@ void QuicConnection::OnPacketComplete() {
   ClearLastFrames();
   CloseIfTooManyOutstandingSentPackets();
 }
+
+#if defined(QUICHE_MOQ_TRACE)
+void QuicConnection::FinishMoqTracePacket(quic_trace_packet_outcome outcome) {
+  if (moq_trace_rx_header_parse_.has_value()) {
+    moq_trace_rx_header_parse_->finish(outcome);
+    moq_trace_rx_header_parse_.reset();
+  }
+  if (moq_trace_rx_header_unprotect_.has_value()) {
+    moq_trace_rx_header_unprotect_->finish(outcome);
+    moq_trace_rx_header_unprotect_.reset();
+  }
+  if (moq_trace_rx_payload_decrypt_.has_value()) {
+    moq_trace_rx_payload_decrypt_->finish(outcome);
+    moq_trace_rx_payload_decrypt_.reset();
+  }
+  if (moq_trace_rx_packet_.has_value()) {
+    moq_trace_rx_packet_->finish(outcome);
+    moq_trace_rx_packet_.reset();
+  }
+}
+#endif
 
 bool QuicConnection::IsValidStatelessResetToken(
     const StatelessResetToken& token) const {
@@ -2922,6 +3048,12 @@ void QuicConnection::ProcessUdpPacket(const QuicSocketAddress& self_address,
 
   ScopedPacketFlusher flusher(this);
   if (!framer_.ProcessPacket(packet)) {
+#if defined(QUICHE_MOQ_TRACE)
+    FinishMoqTracePacket(
+        framer_.error() == QUIC_DECRYPTION_FAILURE
+            ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
+            : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
+#endif
     // If we are unable to decrypt this packet, it might be
     // because the CHLO or SHLO packet was lost.
     QUIC_DVLOG(1) << ENDPOINT
@@ -4389,9 +4521,36 @@ WriteResult QuicConnection::SendPacketToWriter(
   last_ecn_codepoint_sent_ = ecn_codepoint;
   last_flow_label_sent_ = flow_label;
   params.flow_label = flow_label;
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX,
+                                  moq_trace_connection_id_);
+#endif
   WriteResult result =
       writer->WritePacket(buffer, buf_len, self_address, destination_address,
                           per_packet_options_, params);
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace_socket_outcome trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_ERROR;
+  switch (result.status) {
+    case WRITE_STATUS_OK:
+      trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_SUCCESS;
+      break;
+    case WRITE_STATUS_BLOCKED:
+      trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_WOULD_BLOCK;
+      break;
+    case WRITE_STATUS_BLOCKED_DATA_BUFFERED:
+      trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_PENDING;
+      break;
+    default:
+      break;
+  }
+  quic_trace::SocketStats trace_stats;
+  trace_stats.buffers = 1;
+  trace_stats.datagrams = result.status == WRITE_STATUS_OK ? 1 : 0;
+  trace_stats.bytes = result.status == WRITE_STATUS_OK
+                          ? static_cast<uint64_t>(result.bytes_written)
+                          : 0;
+  trace_socket.finish(trace_outcome, trace_stats);
+#endif
   return result;
 }
 
@@ -4708,6 +4867,14 @@ void QuicConnection::MaybeProcessUndecryptablePackets() {
     last_received_packet_info_ = undecryptable_packet->packet_info;
     current_packet_data_ = undecryptable_packet->packet->data();
     const bool processed = framer_.ProcessPacket(*undecryptable_packet->packet);
+#if defined(QUICHE_MOQ_TRACE)
+    if (!processed) {
+      FinishMoqTracePacket(
+          framer_.error() == QUIC_DECRYPTION_FAILURE
+              ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
+              : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
+    }
+#endif
     current_packet_data_ = nullptr;
 
     if (processed) {
@@ -4772,6 +4939,12 @@ bool QuicConnection::MaybeProcessCoalescedPackets() {
       processed = true;
       ++stats_.num_coalesced_packets_processed;
     } else {
+#if defined(QUICHE_MOQ_TRACE)
+      FinishMoqTracePacket(
+          framer_.error() == QUIC_DECRYPTION_FAILURE
+              ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
+              : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
+#endif
       // If we are unable to decrypt this packet, it might be
       // because the CHLO or SHLO packet was lost.
     }

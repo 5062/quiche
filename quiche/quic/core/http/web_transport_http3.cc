@@ -62,6 +62,14 @@ WebTransportHttp3::WebTransportHttp3(QuicSpdySession* session,
   connect_stream_->RegisterHttp3DatagramVisitor(this);
 }
 
+std::optional<uint64_t> WebTransportHttp3::TraceConnectionId() const {
+#if defined(QUICHE_MOQ_TRACE)
+  return session_->connection()->moq_trace_connection_id();
+#else
+  return std::nullopt;
+#endif
+}
+
 void WebTransportHttp3::AssociateStream(QuicStreamId stream_id) {
   streams_.insert(stream_id);
 
