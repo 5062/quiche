@@ -146,12 +146,19 @@ moq_trace/analyze.sh moq_trace/artifacts/capture/session \
 ```
 
 A six second traced loopback run through the relay reported 78 received groups
-with no mismatches in the benchmark and produced 476 object start and end pairs
-and 3246 packet start and end pairs. The analysis of the relay process resolved
-119 inbound objects into exactly 119 outbound copies, with one `create` and one
+with no mismatches in the benchmark. The archived run in
+`moq_trace/artifacts/capture` produced 473 MoQ object start and end pairs and
+3206 packet start and end pairs, and the analysis of its relay process resolved
+118 inbound objects into exactly 118 outbound copies, with one `create` and one
 `frame_commit` phase and four payload fragments each. It correlated every object
-with the packets that carried it (238 coverage rows) and reported object, QUIC
-object, packet, and socket metrics.
+with the packets that carried it (236 coverage rows) and reported object, QUIC
+object, packet, and socket metrics. Exact counts move with run timing, and the
+winning condition is the one the analyzer enforces: every inbound object has
+exactly one outbound copy per subscriber.
+
+Reusing a capture directory accumulates sessions in it, because LTTng adds a
+session directory per run and Babeltrace 2 decodes all of them. `--pid` selects
+the run to analyze, so `capture.sh` prints it.
 
 The ordinary configuration keeps the standard suite green: with the macro off,
 the `//quiche:moqt_*_test` targets pass, and the built relay exports neither
