@@ -280,6 +280,7 @@ quiche_core_hdrs = [
     "quic/core/http/web_transport_only_server_session.h",
     "quic/core/http/web_transport_stream_adapter.h",
     "quic/core/legacy_quic_stream_id_manager.h",
+    "quic/core/moq_trace_utils.h",
     "quic/core/packet_number_indexed_queue.h",
     "quic/core/proto/cached_network_parameters_proto.h",
     "quic/core/proto/crypto_server_config_proto.h",

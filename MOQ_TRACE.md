@@ -76,15 +76,13 @@ the execution root, so they arrive through `--cxxopt`, `--linkopt`, and
 moq_trace/build.sh                         # traced build of //quiche:moqt_relay
 TRACE=0 moq_trace/build.sh                 # same sources, hooks compiled out
 TRACE=0 moq_trace/test.sh                  # the MoQ test targets, hooks off
-moq_trace/capture.sh moq_trace/artifacts/capture ./bazel-bin/quiche/moqt_relay loopback
-moq_trace/analyze.sh moq_trace/artifacts/capture/session \
-  --output moq_trace/artifacts/capture/out.duckdb \
-  --object-size 4096 --subscribers 1 --pid <relay pid printed by capture.sh>
+moq_trace/capture.sh moq_trace/artifacts/capture-1 ./bazel-bin/quiche/moqt_relay loopback
 ```
 
-Each script re-executes itself inside the `moq-trace2` development shell when its
-tools are not already on `PATH`, so the checkout is the only thing to open. Set
-`MOQ_TRACE2_SRC` when the two repositories are not siblings.
+Run the scripts from an environment that supplies Clang, Bazelisk or Bazel, ICU,
+LTTng-UST, Babeltrace 2, `moq-trace`, `moq-bench`, and
+`moq-bench-server`. They never enter or select a development shell or depend on
+the location of a `moq-trace2` checkout.
 
 Options are collected wherever they appear and the first argument that names a
 directory is the worktree, so `moq_trace/test.sh . --jobs=8` tests this checkout
@@ -96,20 +94,24 @@ untraced configurations should both stay compiled: each run otherwise
 invalidates the other one's objects, and the alternate base leaves the workspace
 `bazel-*` symlinks pointing at the traced binary.
 
-`capture.sh` starts the relay under LTTng, drives it with the `moq-bench` peers
-from `moq-trace2`, decodes the capture with Babeltrace 2, and prints the relay pid
-and the matching analysis command. It mints a throwaway certificate into the
-output directory unless `MOQ_TRACE_CERT` and `MOQ_TRACE_KEY` name an existing
-pair, so a capture needs nothing left over from an earlier run.
+`capture.sh` requires a new output directory, starts the relay under LTTng,
+drives it with the `moq-bench` peers from `moq-trace2`, decodes both providers,
+and runs the analyzer for the captured relay pid. Any failed step fails the
+command, and an exit trap stops peer processes and destroys the LTTng session.
+It mints a throwaway certificate unless `MOQ_TRACE_CERT` and `MOQ_TRACE_KEY`
+name an existing pair. `MOQ_TRACE_BENCH_CLIENT` and `MOQ_TRACE_BENCH_SERVER`
+can name explicit executable paths when the benchmark commands are not on
+`PATH`.
 
 Traced builds require Linux and LTTng-UST. A build without the macro compiles the
 modified sources with no trace code and no new link dependencies. The provider
-archives are consumed from `moq-trace2/target/install` rather than copied here,
-because a snapshot of them would drift from the schemas the analyzer reads; point
-`MOQ_TRACE_PREFIX` at another prefix, or regenerate that one with
-`cmake --install ~/moq-trace2/target/cmake --prefix <prefix> --component moq_trace
---component quic_trace`. The compiler, bazel, and ICU paths default to the local
-Nix shell and can be overridden with the `MOQ_TRACE_*` environment variables.
+archives are consumed from the installed prefix named by the required
+`MOQ_TRACE_PREFIX` environment variable rather than copied here, because a
+snapshot would drift from the schemas the analyzer reads. The compiler and
+Bazel executable are found on `PATH`; ICU and LTTng are found with `pkg-config`.
+Nonstandard locations can use
+`MOQ_TRACE_CLANG`, `MOQ_TRACE_CLANGXX`, `MOQ_TRACE_BAZELISK`,
+`MOQ_TRACE_ICU_INCLUDE`, and `MOQ_TRACE_ICU_LIBDIR`.
 
 Build output, Bazel convenience symlinks, and `moq_trace/artifacts` are ignored by
 git. The artifacts directory holds the traced relay binary under `bin/`, the test
@@ -122,9 +124,11 @@ Three fixes belong to this fork and are not tracepoints:
 
 1. `MoqtControlMessageParser::ReadTrackNamespace` accepts an empty namespace when
    parsing a SUBSCRIBE_NAMESPACE prefix. Draft-16 section 9.25 allows an empty
-   prefix and the benchmark peer sends one.
+   prefix and the benchmark peer sends one. Unit tested by
+   `EmptySubscribeNamespacePrefix`.
 2. `MoqtRelay::MoqtRelay` assigns the resolved client event loop to
-   `client_event_loop_`. Without it the relay keeps a null loop.
+   `client_event_loop_`, and destroys the upstream client before the server that
+   owns that loop. Unit tested by `DefaultUpstreamUsesServerEventLoop`.
 3. `MoqtRelayTrackPublisher::OnObjectFragment` tolerates a status change on an
    object that arrived in fragments. Draft-16 signals the end of a group with the
    stream FIN, so the fragment that completes an object carries `kEndOfGroup`
@@ -139,26 +143,14 @@ Three fixes belong to this fork and are not tracepoints:
 moq_trace/build.sh
 moq_trace/test.sh
 TRACE=0 moq_trace/test.sh
-moq_trace/capture.sh moq_trace/artifacts/capture ./bazel-bin/quiche/moqt_relay loopback
-moq_trace/analyze.sh moq_trace/artifacts/capture/session \
-  --output moq_trace/artifacts/capture/trace.duckdb \
-  --object-size 4096 --subscribers 1 --pid <relay-vpid>
+moq_trace/capture.sh moq_trace/artifacts/capture-1 ./bazel-bin/quiche/moqt_relay loopback
 ```
 
-A six second traced loopback run through the relay reported 78 received groups
-with no mismatches in the benchmark. The archived run in
-`moq_trace/artifacts/capture` produced 473 MoQ object start and end pairs and
-3206 packet start and end pairs, and the analysis of its relay process resolved
-118 inbound objects into exactly 118 outbound copies, with one `create` and one
-`frame_commit` phase and four payload fragments each. It correlated every object
-with the packets that carried it (236 coverage rows) and reported object, QUIC
-object, packet, and socket metrics. Exact counts move with run timing, and the
-winning condition is the one the analyzer enforces: every inbound object has
-exactly one outbound copy per subscriber.
-
-Reusing a capture directory accumulates sessions in it, because LTTng adds a
-session directory per run and Babeltrace 2 decodes all of them. `--pid` selects
-the run to analyze, so `capture.sh` prints it.
+The capture command is the acceptance check: the benchmark must complete without
+mismatches, both providers must decode, and the analyzer must confirm that every
+inbound object has exactly one outbound copy per subscriber. Exact event and
+coverage counts vary with run timing, so the command validates the correlation
+contract instead of comparing stale archived counts.
 
 The ordinary configuration keeps the standard suite green: with the macro off,
 the `//quiche:moqt_*_test` targets pass, and the built relay exports neither

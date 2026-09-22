@@ -4,6 +4,8 @@
 
 #include "quiche/quic/core/quic_packet_reader.h"
 
+#include <cerrno>
+
 #include "absl/base/macros.h"
 #include "quiche/quic/core/quic_packets.h"
 #include "quiche/quic/core/quic_process_packet_interface.h"
@@ -68,18 +70,25 @@ bool QuicPacketReader::ReadAndDispatchPackets(
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
 #endif
-  size_t packets_read =
-      socket_api_.ReadMultiplePackets(fd, info_bits, &read_results_);
+  int read_error = 0;
+  size_t packets_read = socket_api_.ReadMultiplePackets(
+      fd, info_bits, &read_results_, &read_error);
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::SocketStats trace_stats;
-  trace_stats.buffers = read_results_.size();
-  trace_stats.datagrams = packets_read;
+  trace_stats.buffers = packets_read;
   for (size_t i = 0; i < packets_read; ++i) {
     if (read_results_[i].ok) {
+      ++trace_stats.datagrams;
       trace_stats.bytes += read_results_[i].packet_buffer.buffer_len;
     }
   }
-  trace_socket.finish(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS, trace_stats);
+  const quic_trace_socket_outcome trace_outcome =
+      packets_read > 0 || read_error == 0
+          ? QUIC_TRACE_SOCKET_OUTCOME_SUCCESS
+          : (read_error == EAGAIN || read_error == EWOULDBLOCK
+                 ? QUIC_TRACE_SOCKET_OUTCOME_WOULD_BLOCK
+                 : QUIC_TRACE_SOCKET_OUTCOME_ERROR);
+  trace_socket.finish(trace_outcome, trace_stats);
 #endif
   if (GetQuicReloadableFlag(quic_move_clock_now)) {
     QUIC_CODE_COUNT(quic_move_clock_now);

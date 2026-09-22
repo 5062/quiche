@@ -2493,6 +2493,7 @@ class QUICHE_EXPORT QuicConnection
   std::optional<quic_trace::PacketPhase> moq_trace_rx_header_parse_;
   std::optional<quic_trace::PacketPhase> moq_trace_rx_header_unprotect_;
   std::optional<quic_trace::PacketPhase> moq_trace_rx_payload_decrypt_;
+  size_t moq_trace_rx_packet_length_ = 0;
 #endif
 
   // The ECN codepoint of the last packet to be sent to the writer, which

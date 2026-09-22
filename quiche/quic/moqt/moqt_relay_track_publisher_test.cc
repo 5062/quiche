@@ -416,21 +416,24 @@ TEST_F(MoqtRelayTrackPublisherTest, FragmentedObjectStatusIsKnownAtTheEnd) {
   EXPECT_CALL(listener_, OnNewObjectAvailable(location, Optional(0),
                                               /*publisher_priority=*/128));
   EXPECT_CALL(listener_, OnTrackPublisherGone).Times(0);
-  publisher_.OnObjectFragment(
-      kTrackName,
-      PublishedObjectMetadata{location, 0, "", MoqtObjectStatus::kNormal, 128,
-                              6},
-      "obj", /*offset=*/0);
+  PublishedObjectMetadata first_fragment{
+      location, 0, "", MoqtObjectStatus::kNormal, 128, 6};
+  publisher_.OnObjectFragment(kTrackName, first_fragment, "obj", /*offset=*/0);
+#if defined(QUICHE_MOQ_TRACE)
+  ASSERT_TRUE(first_fragment.trace_logical_id.has_value());
+#endif
   // Nothing is complete yet, so no track state is known.
   EXPECT_EQ(publisher_.largest_location(), std::nullopt);
 
   EXPECT_CALL(listener_, OnNewObjectAvailable(location, Optional(0),
                                               /*publisher_priority=*/128));
-  publisher_.OnObjectFragment(
-      kTrackName,
-      PublishedObjectMetadata{location, 0, "", MoqtObjectStatus::kEndOfGroup,
-                              128, 6},
-      "ect", /*offset=*/3);
+  PublishedObjectMetadata final_fragment{
+      location, 0, "", MoqtObjectStatus::kEndOfGroup, 128, 6};
+  publisher_.OnObjectFragment(kTrackName, final_fragment, "ect", /*offset=*/3);
+#if defined(QUICHE_MOQ_TRACE)
+  EXPECT_EQ(final_fragment.trace_logical_id,
+            first_fragment.trace_logical_id);
+#endif
   EXPECT_FALSE(track_deleted_);
   EXPECT_EQ(publisher_.largest_location(), location);
   std::optional<PublishedObject> object =

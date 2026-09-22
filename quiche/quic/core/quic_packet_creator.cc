@@ -39,6 +39,7 @@
 #include "quiche/quic/platform/api/quic_logging.h"
 #include "quiche/quic/platform/api/quic_server_stats.h"
 #include "quiche/common/print_elements.h"
+#include "quiche/quic/core/moq_trace_utils.h"
 
 #if defined(QUICHE_MOQ_TRACE)
 #include <quic_trace/trace.hpp>
@@ -72,21 +73,6 @@ void LogCoalesceStreamFrameStatus(bool success) {
 }
 
 #if defined(QUICHE_MOQ_TRACE)
-quic_trace_packet_space TracePacketSpace(EncryptionLevel level) {
-  switch (level) {
-    case ENCRYPTION_INITIAL:
-      return QUIC_TRACE_PACKET_SPACE_INITIAL;
-    case ENCRYPTION_HANDSHAKE:
-      return QUIC_TRACE_PACKET_SPACE_HANDSHAKE;
-    case ENCRYPTION_ZERO_RTT:
-      return QUIC_TRACE_PACKET_SPACE_ZERO_RTT;
-    case ENCRYPTION_FORWARD_SECURE:
-      return QUIC_TRACE_PACKET_SPACE_DATA;
-    default:
-      return QUIC_TRACE_PACKET_SPACE_DATA;
-  }
-}
-
 void TraceStreamFrames(quic_trace::Packet& packet, const QuicFrames& frames) {
   for (const QuicFrame& frame : frames) {
     if (frame.type != STREAM_FRAME || frame.stream_frame.data_length == 0) {
@@ -632,7 +618,7 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
   trace_context.connection_id = moq_trace_connection_id_;
   trace_context.direction = QUIC_TRACE_DIRECTION_TX;
   trace_context.packet_number = packet_.packet_number.ToUint64();
-  trace_context.packet_space = TracePacketSpace(packet_.encryption_level);
+  trace_context.packet_space = MoqTracePacketSpace(packet_.encryption_level);
   std::optional<quic_trace::Packet> trace_packet;
   trace_packet.emplace(trace_context);
   std::optional<quic_trace::PacketPhase> trace_encode;
@@ -891,7 +877,7 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   trace_context.connection_id = moq_trace_connection_id_;
   trace_context.direction = QUIC_TRACE_DIRECTION_TX;
   trace_context.packet_number = packet_.packet_number.ToUint64();
-  trace_context.packet_space = TracePacketSpace(packet_.encryption_level);
+  trace_context.packet_space = MoqTracePacketSpace(packet_.encryption_level);
   std::optional<quic_trace::Packet> trace_packet;
   trace_packet.emplace(trace_context);
   std::optional<quic_trace::PacketPhase> trace_encode;

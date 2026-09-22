@@ -1488,6 +1488,22 @@ TEST_F(MoqtMessageSpecificTest, NamespaceTooSmall) {
               HasSubstr("Invalid number of namespace elements"));
 }
 
+TEST_F(MoqtMessageSpecificTest, EmptySubscribeNamespacePrefix) {
+  const char subscribe_namespace[] = {
+      0x11, 0x00, 0x04, 0x01,  // type, length = 4, request_id = 1
+      0x00,                    // empty namespace prefix
+      0x00,                    // subscribe namespace option
+      0x00,                    // no parameters
+  };
+  absl::StatusOr<std::vector<AnyMoqtControlMessage>> parsed = ParseAllMessages(
+      absl::string_view(subscribe_namespace, sizeof(subscribe_namespace)),
+      kDefaultMoqtVersion, /*uses_web_transport=*/false);
+  ASSERT_TRUE(parsed.ok());
+  ASSERT_EQ(parsed->size(), 1u);
+  const auto& message = std::get<MoqtSubscribeNamespace>((*parsed)[0]);
+  EXPECT_TRUE(message.track_namespace_prefix.empty());
+}
+
 TEST_F(MoqtMessageSpecificTest, NamespaceTooLarge) {
   char publish_namespace[39] = {
       0x06, 0x00, 0x23, 0x02,  // type, length = 35, request_id = 2

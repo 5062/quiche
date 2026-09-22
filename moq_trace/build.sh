@@ -17,18 +17,9 @@
 # model them as a hermetic dependency and they are passed through --cxxopt,
 # --linkopt, and CPLUS_INCLUDE_PATH instead.
 #
-# Toolchain locations default to the Nix development shell used for this fork.
-# Override them with the MOQ_TRACE_* environment variables.
+# Toolchain locations come from the active environment. Override individual
+# paths with the MOQ_TRACE_* environment variables when needed.
 set -euo pipefail
-
-# pkg-config, the compiler, and the bazel wrapper come from the moq-trace2
-# development shell, so re-exec inside it when they are not on PATH.
-MOQ_TRACE2_SRC=${MOQ_TRACE2_SRC:-$(cd "$(dirname "$0")/../.." && pwd)/moq-trace2}
-if [ "${MOQ_TRACE_IN_DEVSHELL:-0}" != 1 ] && ! command -v pkg-config >/dev/null 2>&1; then
-  export MOQ_TRACE_IN_DEVSHELL=1
-  exec nix --extra-experimental-features 'nix-command flakes' develop \
-    "$MOQ_TRACE2_SRC" --command bash "${BASH_SOURCE[0]}" "$@"
-fi
 
 # Options are collected wherever they appear. The first remaining argument is
 # the worktree when it names a directory, so "build.sh . //quiche:moqt_relay"
@@ -45,56 +36,76 @@ for arg in "$@"; do
 done
 worktree=${worktree:-$here}
 if [ ${#targets[@]} -eq 0 ]; then
-  targets=(//quiche:moqt_relay)
+  read -r -a targets <<< "${MOQ_TRACE_DEFAULT_TARGETS:-//quiche:moqt_relay}"
 fi
 
-CLANG=${MOQ_TRACE_CLANG:-/nix/store/874j5xydsj6nr6i1zdrjvhln5gmxvvrr-clang-wrapper-21.1.8}
-BAZELISK=${MOQ_TRACE_BAZELISK:-/nix/store/bnxk2g7srfbmm0ghhlzimkzshpwls211-bazelisk-1.28.1/bin/bazelisk}
-ICU_DEV=${MOQ_TRACE_ICU_DEV:-/nix/store/4dn9hz9kl3fvcr4y09n6vdr302bldwcj-icu4c-76.1-dev}
-ICU_LIB=${MOQ_TRACE_ICU_LIB:-/nix/store/clpq5c7bysml4vqpa1x60a5yk3nzkfj4-icu4c-76.1}
-
-# The provider archives and headers are a build product of the moq-trace2
-# checkout, so they are consumed from its install prefix instead of being copied
-# here, where a snapshot would drift from the schemas the analyzer reads. Point
-# MOQ_TRACE_PREFIX at a different prefix, or regenerate this one with:
-#   cmake --install ~/moq-trace2/target/cmake --prefix <prefix> \
-#     --component moq_trace --component quic_trace
-TRACE_PREFIX=${MOQ_TRACE_PREFIX:-$MOQ_TRACE2_SRC/target/install}
+CLANG=${MOQ_TRACE_CLANG:-$(command -v clang || true)}
+CLANGXX=${MOQ_TRACE_CLANGXX:-$(command -v clang++ || true)}
+BAZELISK=${MOQ_TRACE_BAZELISK:-$(command -v bazelisk || command -v bazel || true)}
+if [ -z "$CLANG" ] || [ -z "$CLANGXX" ] || [ -z "$BAZELISK" ]; then
+  echo "clang, clang++, and bazelisk (or bazel) must be on PATH" >&2
+  exit 1
+fi
+if ! command -v pkg-config >/dev/null 2>&1; then
+  echo "pkg-config must be on PATH" >&2
+  exit 1
+fi
+if { [ -z "${MOQ_TRACE_ICU_INCLUDE:-}" ] ||
+     [ -z "${MOQ_TRACE_ICU_LIBDIR:-}" ]; } && ! pkg-config --exists icu-uc; then
+  echo "ICU must be available through pkg-config" >&2
+  exit 1
+fi
+ICU_INCLUDE=${MOQ_TRACE_ICU_INCLUDE:-$(pkg-config --variable=includedir icu-uc)}
+ICU_LIBDIR=${MOQ_TRACE_ICU_LIBDIR:-$(pkg-config --variable=libdir icu-uc)}
 
 common=(
   --features=-layering_check
   --repo_env=CC --repo_env=CXX --repo_env=CPLUS_INCLUDE_PATH
   --action_env=CC --action_env=CXX --action_env=CPLUS_INCLUDE_PATH
-  --linkopt=-L"$ICU_LIB"/lib
+  --linkopt=-L"$ICU_LIBDIR"
   --linkopt=-licui18n --linkopt=-licuuc --linkopt=-licudata
-)
-
-trace=(
-  --cxxopt=-DQUICHE_MOQ_TRACE
-  --linkopt="$TRACE_PREFIX"/lib/libmoq_trace_provider.a
-  --linkopt="$TRACE_PREFIX"/lib/libquic_trace_provider.a
-  --linkopt=-L"$(pkg-config --variable=libdir lttng-ust)"
-  --linkopt=-llttng-ust
-  --linkopt=-llttng-ust-common
-  --linkopt=-ldl
-  --linkopt=-Wl,-u,__start_lttng_ust_tracepoints_ptrs
 )
 
 # TRACE=0 builds the same sources with the hooks compiled out, which is the
 # configuration an ordinary QUICHE checkout sees.
+trace=()
+trace_prefix=""
 if [ "${TRACE:-1}" = 0 ]; then
-  trace=()
-elif [ ! -f "$TRACE_PREFIX/lib/libmoq_trace_provider.a" ]; then
-  echo "no trace provider in $TRACE_PREFIX; build and install moq-trace2 first" >&2
-  exit 1
+  :
 else
-  echo "trace prefix: $TRACE_PREFIX" >&2
+  trace_prefix=${MOQ_TRACE_PREFIX:-}
+  if [ -z "$trace_prefix" ]; then
+    echo "MOQ_TRACE_PREFIX must name an installed moq-trace prefix" >&2
+    exit 1
+  fi
+  if [ ! -f "$trace_prefix/lib/libmoq_trace_provider.a" ] ||
+     [ ! -f "$trace_prefix/lib/libquic_trace_provider.a" ] ||
+     [ ! -f "$trace_prefix/include/moq_trace/trace.hpp" ] ||
+     [ ! -f "$trace_prefix/include/quic_trace/trace.hpp" ]; then
+    echo "trace headers or providers are missing from $trace_prefix" >&2
+    exit 1
+  fi
+  if ! pkg-config --exists lttng-ust; then
+    echo "LTTng-UST must be available through pkg-config" >&2
+    exit 1
+  fi
+  trace=(
+    --cxxopt=-DQUICHE_MOQ_TRACE
+    --linkopt="$trace_prefix"/lib/libmoq_trace_provider.a
+    --linkopt="$trace_prefix"/lib/libquic_trace_provider.a
+    --linkopt=-L"$(pkg-config --variable=libdir lttng-ust)"
+    --linkopt=-llttng-ust
+    --linkopt=-llttng-ust-common
+    --linkopt=-ldl
+    --linkopt=-Wl,-u,__start_lttng_ust_tracepoints_ptrs
+  )
+  echo "trace prefix: $trace_prefix" >&2
 fi
 
 cd "$worktree"
-export CC="$CLANG"/bin/clang
-export CXX="$CLANG"/bin/clang++
-export CPLUS_INCLUDE_PATH="$ICU_DEV"/include:"$TRACE_PREFIX"/include
+export CC="$CLANG"
+export CXX="$CLANGXX"
+export CPLUS_INCLUDE_PATH="$ICU_INCLUDE${trace_prefix:+:$trace_prefix/include}${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
 
 # An alternate output base would otherwise rewrite the workspace bazel-* symlinks
 # and silently redirect `./bazel-bin/quiche/moqt_relay` at the other build.

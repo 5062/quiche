@@ -75,6 +75,7 @@
 #include "quiche/quic/core/quic_error_codes.h"
 #include "quiche/quic/core/quic_framer.h"
 #include "quiche/quic/core/quic_mtu_discovery.h"
+#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/core/quic_packet_creator.h"
 #include "quiche/quic/core/quic_packet_number.h"
 #include "quiche/quic/core/quic_packet_writer.h"
@@ -127,22 +128,6 @@ const size_t kMaxReceivedClientAddressSize = 20;
 // marked packet is acked. Avoids abandoning ECN because of one burst loss,
 // but doesn't allow multiple RTTs of user delay in the hope of using ECN.
 const uint8_t kEcnPtoLimit = 2;
-
-#if defined(QUICHE_MOQ_TRACE)
-quic_trace_packet_space TracePacketSpace(EncryptionLevel level) {
-  switch (level) {
-    case ENCRYPTION_INITIAL:
-      return QUIC_TRACE_PACKET_SPACE_INITIAL;
-    case ENCRYPTION_HANDSHAKE:
-      return QUIC_TRACE_PACKET_SPACE_HANDSHAKE;
-    case ENCRYPTION_ZERO_RTT:
-      return QUIC_TRACE_PACKET_SPACE_ZERO_RTT;
-    case ENCRYPTION_FORWARD_SECURE:
-    default:
-      return QUIC_TRACE_PACKET_SPACE_DATA;
-  }
-}
-#endif
 
 // Constant representing a 7/8 probability of enabling the spin bit for each
 // direction of communication. Since the spin bit only works when both sides
@@ -874,6 +859,7 @@ void QuicConnection::OnPacket() {
   context.connection_id = moq_trace_connection_id_;
   context.direction = QUIC_TRACE_DIRECTION_RX;
   moq_trace_rx_packet_.emplace(context);
+  moq_trace_rx_packet_->set_byte_len(moq_trace_rx_packet_length_);
   moq_trace_rx_header_parse_.emplace(
       moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_HEADER_PARSE));
 #endif
@@ -1073,6 +1059,12 @@ bool QuicConnection::ValidateServerConnectionId(
 bool QuicConnection::OnUnauthenticatedPublicHeader(
     const QuicPacketHeader& header) {
 #if defined(QUICHE_MOQ_TRACE)
+  if (moq_trace_rx_packet_.has_value()) {
+    std::optional<quic_trace_packet_space> space = MoqTracePacketSpace(header);
+    if (space.has_value()) {
+      moq_trace_rx_packet_->set_space(*space);
+    }
+  }
   if (moq_trace_rx_header_parse_.has_value()) {
     moq_trace_rx_header_parse_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
     moq_trace_rx_header_parse_.reset();
@@ -1288,7 +1280,7 @@ void QuicConnection::OnDecryptedPacket(size_t length,
 #if defined(QUICHE_MOQ_TRACE)
   if (moq_trace_rx_packet_.has_value()) {
     moq_trace_rx_packet_->set_byte_len(length);
-    moq_trace_rx_packet_->set_space(TracePacketSpace(level));
+    moq_trace_rx_packet_->set_space(MoqTracePacketSpace(level));
   }
   if (moq_trace_rx_payload_decrypt_.has_value()) {
     moq_trace_rx_payload_decrypt_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
@@ -3047,6 +3039,9 @@ void QuicConnection::ProcessUdpPacket(const QuicSocketAddress& self_address,
                 << last_received_packet_info_.destination_address;
 
   ScopedPacketFlusher flusher(this);
+#if defined(QUICHE_MOQ_TRACE)
+  moq_trace_rx_packet_length_ = packet.length();
+#endif
   if (!framer_.ProcessPacket(packet)) {
 #if defined(QUICHE_MOQ_TRACE)
     FinishMoqTracePacket(
@@ -4866,6 +4861,9 @@ void QuicConnection::MaybeProcessUndecryptablePackets() {
     }
     last_received_packet_info_ = undecryptable_packet->packet_info;
     current_packet_data_ = undecryptable_packet->packet->data();
+#if defined(QUICHE_MOQ_TRACE)
+    moq_trace_rx_packet_length_ = undecryptable_packet->packet->length();
+#endif
     const bool processed = framer_.ProcessPacket(*undecryptable_packet->packet);
 #if defined(QUICHE_MOQ_TRACE)
     if (!processed) {
@@ -4935,6 +4933,9 @@ bool QuicConnection::MaybeProcessCoalescedPackets() {
     received_coalesced_packets_.pop_front();
 
     QUIC_DVLOG(1) << ENDPOINT << "Processing coalesced packet";
+#if defined(QUICHE_MOQ_TRACE)
+    moq_trace_rx_packet_length_ = packet->length();
+#endif
     if (framer_.ProcessPacket(*packet)) {
       processed = true;
       ++stats_.num_coalesced_packets_processed;

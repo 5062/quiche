@@ -5,7 +5,6 @@
 #include "quiche/quic/moqt/moqt_uni_stream.h"
 
 #include <cstdint>
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -37,12 +36,6 @@
 #include "quiche/web_transport/web_transport.h"
 
 namespace moqt {
-
-#if defined(QUICHE_MOQ_TRACE)
-namespace {
-std::atomic<uint64_t> next_trace_logical_object{1};
-}  // namespace
-#endif
 
 void OutgoingUniStream::UpdatePriority(MoqtPriority subscriber_priority) {
   priority_.send_order = UpdateSendOrderForSubscriberPriority(
@@ -448,9 +441,9 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
                                          bool end_of_message) {
 #if defined(QUICHE_MOQ_TRACE)
   trace_fragment_succeeded_ = false;
-  if (trace_object_.has_value() && !payload.empty()) {
-    trace_payload_phase_.emplace(
-        trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ));
+  if ((trace_object_.has_value() || trace_header_.has_value()) &&
+      !payload.empty()) {
+    trace_payload_start_ns_ = quic_trace::detail::now_ns();
   }
 #endif
   QUICHE_DVLOG(1) << "Received OBJECT message on stream "
@@ -537,25 +530,32 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
       metadata.payload_length = message.payload_length;
       metadata.arrival_time = clock_->Now();
 #if defined(QUICHE_MOQ_TRACE)
-      metadata.trace_logical_id = trace_logical_id_;
-      std::optional<moq_trace::ObjectPhase> create;
-      std::optional<moq_trace::ObjectPhase> commit;
+      std::optional<uint64_t> create_start_ns;
+      std::optional<uint64_t> commit_start_ns;
       if (trace_object_.has_value() && bytes_received_this_object_ == 0) {
-        create.emplace(trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_CREATE));
+        create_start_ns = quic_trace::detail::now_ns();
+      } else if (trace_header_.has_value() && bytes_received_this_object_ == 0) {
+        create_start_ns = quic_trace::detail::now_ns();
       }
-      if (trace_object_.has_value() && end_of_message) {
-        commit.emplace(
-            trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_FRAME_COMMIT));
+      if ((trace_object_.has_value() || trace_header_.has_value()) &&
+          end_of_message) {
+        commit_start_ns = quic_trace::detail::now_ns();
       }
 #endif
       visitor_->OnObjectFragment(track->full_track_name(), metadata, payload,
                                  bytes_received_this_object_);
 #if defined(QUICHE_MOQ_TRACE)
-      if (create.has_value()) {
-        create->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+      StartTraceObject(metadata);
+      const uint64_t fragment_end_ns = quic_trace::detail::now_ns();
+      if (trace_object_.has_value() && create_start_ns.has_value()) {
+        auto create = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_CREATE,
+                                              *create_start_ns);
+        create.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, fragment_end_ns);
       }
-      if (commit.has_value()) {
-        commit->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+      if (trace_object_.has_value() && commit_start_ns.has_value()) {
+        auto commit = trace_object_->phase_at(
+            MOQ_TRACE_OBJECT_PHASE_FRAME_COMMIT, *commit_start_ns);
+        commit.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, fragment_end_ns);
       }
 #endif
     }
@@ -594,45 +594,61 @@ void IncomingDataStream::OnObjectHeader(const MoqtObject& message,
   if (IsFetch()) {
     return;
   }
-  trace_logical_id_ = moq_trace::LogicalId{
-      next_trace_logical_object.fetch_add(1, std::memory_order_relaxed), 0};
+  trace_header_ = PendingTraceHeader{message, start_ns, start_offset, end_ns,
+                                    end_offset};
+}
+
+void IncomingDataStream::StartTraceObject(
+    const PublishedObjectMetadata& metadata) {
+  if (trace_object_.has_value() || !trace_header_.has_value() ||
+      !metadata.trace_logical_id.has_value()) {
+    return;
+  }
+  const PendingTraceHeader& pending = *trace_header_;
   moq_trace::ObjectContext context;
-  context.logical_id = *trace_logical_id_;
+  context.logical_id = *metadata.trace_logical_id;
   context.identity =
-      moq_trace::ObjectIdentity{message.track_alias, message.group_id,
-                                message.object_id};
+      moq_trace::ObjectIdentity{pending.message.track_alias,
+                                pending.message.group_id,
+                                pending.message.object_id};
   context.direction = QUIC_TRACE_DIRECTION_RX;
   context.session_id = session_->TraceSessionId();
   context.connection_id = session_->TraceConnectionId();
   context.stream_id = stream_->GetStreamId();
-  context.stream_offset_start = start_offset;
-  context.start_ns = start_ns;
-  context.payload_bytes = message.payload_length;
+  context.stream_offset_start = pending.start_offset;
+  context.start_ns = pending.start_ns;
+  context.payload_bytes = pending.message.payload_length;
   trace_object_.emplace(context);
-  auto header = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_HEADER_PARSE,
-                                        start_ns);
-  header.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, end_ns);
-  trace_object_->set_stream_offset_end(end_offset);
+  auto header_phase = trace_object_->phase_at(
+      MOQ_TRACE_OBJECT_PHASE_HEADER_PARSE, trace_header_->start_ns);
+  header_phase.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS,
+                         trace_header_->end_ns);
+  trace_object_->set_stream_offset_end(trace_header_->end_offset);
 }
 
 void IncomingDataStream::OnObjectPayloadConsumed(size_t,
                                                  bool end_of_message) {
   if (!trace_object_.has_value()) {
+    if (end_of_message) {
+      trace_header_.reset();
+      trace_payload_start_ns_.reset();
+    }
     return;
   }
   trace_object_->set_stream_offset_end(stream_->ReadOffset());
-  if (trace_payload_phase_.has_value()) {
-    trace_payload_phase_->finish(trace_fragment_succeeded_
-                                     ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
-                                     : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
-    trace_payload_phase_.reset();
+  if (trace_payload_start_ns_.has_value()) {
+    auto payload = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ,
+                                           *trace_payload_start_ns_);
+    payload.finish(trace_fragment_succeeded_ ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                             : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+    trace_payload_start_ns_.reset();
   }
   if (end_of_message) {
     trace_object_->finish(trace_fragment_succeeded_
                               ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
                               : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
     trace_object_.reset();
-    trace_logical_id_.reset();
+    trace_header_.reset();
   }
 }
 #endif
@@ -729,9 +745,9 @@ void IncomingDataStream::OnParsingError(MoqtError error_code,
     trace_object_->set_stream_offset_end(stream_->ReadOffset());
     trace_object_->finish(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
     trace_object_.reset();
-    trace_payload_phase_.reset();
-    trace_logical_id_.reset();
   }
+  trace_payload_start_ns_.reset();
+  trace_header_.reset();
 #endif
   session_->Error(error_code, absl::StrCat("Parse error: ", reason));
 }

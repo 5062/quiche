@@ -286,9 +286,19 @@ class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
   SessionToUniStreamInterface* session_;
   const quic::QuicClock* absl_nonnull clock_;
 #if defined(QUICHE_MOQ_TRACE)
+  struct PendingTraceHeader {
+    MoqtObject message;
+    uint64_t start_ns;
+    uint64_t start_offset;
+    uint64_t end_ns;
+    uint64_t end_offset;
+  };
+
+  void StartTraceObject(const PublishedObjectMetadata& metadata);
+
   std::optional<moq_trace::Object> trace_object_;
-  std::optional<moq_trace::ObjectPhase> trace_payload_phase_;
-  std::optional<moq_trace::LogicalId> trace_logical_id_;
+  std::optional<PendingTraceHeader> trace_header_;
+  std::optional<uint64_t> trace_payload_start_ns_;
   bool trace_fragment_succeeded_ = false;
 #endif
 };

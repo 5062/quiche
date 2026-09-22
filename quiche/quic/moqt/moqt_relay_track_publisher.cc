@@ -4,6 +4,7 @@
 
 #include "quiche/quic/moqt/moqt_relay_track_publisher.h"
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -26,6 +27,12 @@
 #include "quiche/common/quiche_weak_ptr.h"
 
 namespace moqt {
+
+#if defined(QUICHE_MOQ_TRACE)
+namespace {
+std::atomic<uint64_t> next_trace_logical_object{1};
+}  // namespace
+#endif
 
 void MoqtRelayTrackPublisher::OnReply(
     const FullTrackName&,
@@ -176,10 +183,17 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     if (!object.empty()) {
       slice = quiche::QuicheMemSlice::Copy(object);
     }
-    auto [it, inserted] =
-        subgroup.try_emplace(metadata.location.object, metadata,
-                             std::move(slice), last_object_in_stream);
-    if (!inserted) {
+    auto it = subgroup.find(metadata.location.object);
+    if (it == subgroup.end()) {
+      PublishedObjectMetadata cached_metadata = metadata;
+#if defined(QUICHE_MOQ_TRACE)
+      cached_metadata.trace_logical_id = moq_trace::LogicalId{
+          next_trace_logical_object.fetch_add(1, std::memory_order_relaxed), 0};
+      metadata.trace_logical_id = cached_metadata.trace_logical_id;
+#endif
+      subgroup.try_emplace(metadata.location.object, cached_metadata,
+                           std::move(slice), last_object_in_stream);
+    } else {
       duplicate_object = &it->second;
     }
   }
@@ -202,6 +216,9 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       OnMalformedTrack(full_track_name);
       return;
     }
+#if defined(QUICHE_MOQ_TRACE)
+    metadata.trace_logical_id = duplicate_object->metadata().trace_logical_id;
+#endif
     // This could complete an incomplete object.
     if (duplicate_object->metadata().payload_length >
         duplicate_object->payload_received()) {

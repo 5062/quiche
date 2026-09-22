@@ -38,7 +38,9 @@ struct PublishedObjectMetadata {
   uint64_t payload_length;
   quic::QuicTime arrival_time = quic::QuicTime::Zero();
 #if defined(QUICHE_MOQ_TRACE)
-  std::optional<moq_trace::LogicalId> trace_logical_id;
+  // The relay cache assigns this sidecar identity through its const visitor
+  // interface when it accepts the first fragment.
+  mutable std::optional<moq_trace::LogicalId> trace_logical_id;
 #endif
   bool IsMalformed(const PublishedObjectMetadata& other) const {
     // It's OK for arrival_time to be different when checking immutables.
