@@ -69,9 +69,6 @@ MoqtRelay::MoqtRelay(std::unique_ptr<quic::ProofSource> proof_source,
     if (client_event_loop == nullptr) {
       client_event_loop = server_->event_loop();
     }
-    // The upstream client shares the server's event loop. Member declaration
-    // order keeps the server alive until after that client is destroyed.
-    client_event_loop_ = client_event_loop;
     default_upstream_client_ =
         CreateClient(url, ignore_certificate, client_event_loop_);
     default_upstream_client_->Connect(url.PathParamsQuery(),

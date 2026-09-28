@@ -11,7 +11,6 @@
 #include <mswsock.h>
 #include <winsock2.h>
 
-#include <cerrno>
 #include <cstddef>
 
 #include "quiche/quic/core/quic_utils.h"
@@ -191,24 +190,15 @@ void QuicUdpSocketApi::ReadPacket(
 
 size_t QuicUdpSocketApi::ReadMultiplePackets(
     QuicUdpSocketFd fd, QuicUdpPacketInfoBitMask packet_info_interested,
-    ReadPacketResults* results, int* error_code) {
-  if (error_code != nullptr) {
-    *error_code = 0;
-  }
+    ReadPacketResults* results) {
   size_t num_packets = 0;
   for (ReadPacketResult& result : *results) {
     result.ok = false;
   }
   for (ReadPacketResult& result : *results) {
     ReadPacket(fd, packet_info_interested, &result);
-    if (!result.ok) {
-      const int socket_error = WSAGetLastError();
-      if (error_code != nullptr) {
-        *error_code = socket_error == WSAEWOULDBLOCK ? EWOULDBLOCK : EIO;
-      }
-      if (socket_error == WSAEWOULDBLOCK) {
-        break;
-      }
+    if (!result.ok && WSAGetLastError() == WSAEWOULDBLOCK) {
+      break;
     }
     ++num_packets;
   }

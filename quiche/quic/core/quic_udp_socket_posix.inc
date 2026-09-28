@@ -371,10 +371,7 @@ void QuicUdpSocketApi::ReadPacket(
 
 size_t QuicUdpSocketApi::ReadMultiplePackets(
     QuicUdpSocketFd fd, QuicUdpPacketInfoBitMask packet_info_interested,
-    ReadPacketResults* results, int* error_code) {
-  if (error_code != nullptr) {
-    *error_code = 0;
-  }
+    ReadPacketResults* results) {
 #if defined(__linux__) && !defined(__ANDROID__)
   if (packet_info_interested.IsSet(QuicUdpPacketInfoBit::IS_GRO)) {
     size_t num_packets = 0;
@@ -382,12 +379,8 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
       result.ok = false;
     }
     for (ReadPacketResult& result : *results) {
-      errno = 0;
       ReadPacket(fd, packet_info_interested, &result);
       if (!result.ok) {
-        if (error_code != nullptr) {
-          *error_code = errno == 0 ? EIO : errno;
-        }
         break;
       }
       ++num_packets;
@@ -429,9 +422,6 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
     int packets_read = recvmmsg(fd, hdrs, results->size(), MSG_TRUNC, nullptr);
     if (packets_read <= 0) {
       const int error_num = errno;
-      if (error_code != nullptr) {
-        *error_code = error_num;
-      }
       if (error_num != EAGAIN) {
         QUIC_LOG_FIRST_N(ERROR, 100)
             << "Error reading packets: " << strerror(error_num);

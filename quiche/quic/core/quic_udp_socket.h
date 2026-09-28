@@ -280,13 +280,10 @@ class QUICHE_EXPORT QuicUdpSocketApi {
   // Read up to |results->size()| packets from |fd|. The meaning of each element
   // in |*results| has been documented on top of |ReadPacket|.
   // Return the number of elements populated into |*results|, note it is
-  // possible for some of the populated elements to have ok=false. When
-  // provided, |error_code| receives an errno-style value for the read that
-  // stopped the batch, or zero when no read error occurred.
+  // possible for some of the populated elements to have ok=false.
   size_t ReadMultiplePackets(QuicUdpSocketFd fd,
                              QuicUdpPacketInfoBitMask packet_info_interested,
-                             ReadPacketResults* results,
-                             int* error_code = nullptr);
+                             ReadPacketResults* results);
 
   // Write a packet to |fd|.
   // packet_buffer, packet_buffer_len:  The packet buffer to write.

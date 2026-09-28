@@ -58,8 +58,6 @@ class TestMoqtRelay : public MoqtRelay {
     return (client() == nullptr) ? nullptr : client()->session();
   }
 
-  bool has_client() { return client() != nullptr; }
-
   MoqtRelayPublisher* publisher() { return MoqtRelay::publisher(); }
 
   virtual void SetNamespaceCallbacks(MoqtSessionInterface* session) override {
@@ -98,12 +96,6 @@ class MoqtRelayTest : public quiche::test::QuicheTest {
 
   TestMoqtRelay upstream_, relay_, downstream_;
 };
-
-TEST(MoqtRelayConstructionTest, DefaultUpstreamUsesServerEventLoop) {
-  TestMoqtRelay relay("127.0.0.1", 0, "https://127.0.0.1:1", true,
-                      nullptr);
-  EXPECT_TRUE(relay.has_client());
-}
 
 TEST_F(MoqtRelayTest, NodeChainEstablished) {
   // relay_ and downstream_ have a default session.

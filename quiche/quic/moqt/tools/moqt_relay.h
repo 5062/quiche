@@ -72,12 +72,11 @@ class MoqtRelay {
   bool is_closing_ = false;
   quic::QuicEventLoop* client_event_loop_;
 
-  // Declared before the upstream client so its event loop outlives that client.
-  std::unique_ptr<MoqtServer> server_;
   MoqtRelayPublisher publisher_;
 
   // Pointer to a client that has received GOAWAY.
   std::unique_ptr<MoqtClient> default_upstream_client_;
+  std::unique_ptr<MoqtServer> server_;
 };
 
 }  // namespace moqt
