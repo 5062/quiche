@@ -62,6 +62,7 @@
 #include "quiche/quic/core/frames/quic_stream_frame.h"
 #include "quiche/quic/core/frames/quic_streams_blocked_frame.h"
 #include "quiche/quic/core/frames/quic_window_update_frame.h"
+#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/core/quic_alarm_factory.h"
 #include "quiche/quic/core/quic_bandwidth.h"
 #include "quiche/quic/core/quic_coalesced_packet.h"
@@ -74,7 +75,6 @@
 #include "quiche/quic/core/quic_error_codes.h"
 #include "quiche/quic/core/quic_framer.h"
 #include "quiche/quic/core/quic_mtu_discovery.h"
-#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/core/quic_packet_creator.h"
 #include "quiche/quic/core/quic_packet_number.h"
 #include "quiche/quic/core/quic_packet_writer.h"
@@ -1267,13 +1267,9 @@ void QuicConnection::OnUserAgentIdKnown(const std::string& /*user_agent_id*/) {
   sent_packet_manager_.OnUserAgentIdKnown();
 }
 
-void QuicConnection::OnDecryptedPacket(size_t length,
+void QuicConnection::OnDecryptedPacket(size_t /*length*/,
                                        EncryptionLevel level) {
 #if defined(QUICHE_MOQ_TRACE)
-  if (moq_trace_rx_packet_.has_value()) {
-    moq_trace_rx_packet_->set_byte_len(length);
-    moq_trace_rx_packet_->set_space(MoqTracePacketSpace(level));
-  }
   if (moq_trace_rx_payload_decrypt_.has_value()) {
     moq_trace_rx_payload_decrypt_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
     moq_trace_rx_payload_decrypt_.reset();

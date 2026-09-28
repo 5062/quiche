@@ -101,11 +101,11 @@
 #include "quiche/common/platform/api/quiche_logging.h"
 #include "quiche/common/quiche_buffer_allocator.h"
 #include "quiche/common/quiche_circular_deque.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 #if defined(QUICHE_MOQ_TRACE)
 #include <quic_trace/trace.hpp>
 #endif
-#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 

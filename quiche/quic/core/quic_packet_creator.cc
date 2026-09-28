@@ -21,6 +21,7 @@
 #include "quiche/quic/core/frames/quic_padding_frame.h"
 #include "quiche/quic/core/frames/quic_path_challenge_frame.h"
 #include "quiche/quic/core/frames/quic_stream_frame.h"
+#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/core/quic_chaos_protector.h"
 #include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/core/quic_constants.h"
@@ -39,11 +40,6 @@
 #include "quiche/quic/platform/api/quic_logging.h"
 #include "quiche/quic/platform/api/quic_server_stats.h"
 #include "quiche/common/print_elements.h"
-#include "quiche/quic/core/moq_trace_utils.h"
-
-#if defined(QUICHE_MOQ_TRACE)
-#include <quic_trace/trace.hpp>
-#endif
 
 namespace quic {
 namespace {

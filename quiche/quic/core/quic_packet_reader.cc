@@ -4,8 +4,6 @@
 
 #include "quiche/quic/core/quic_packet_reader.h"
 
-#include <cerrno>
-
 #include "absl/base/macros.h"
 #include "quiche/quic/core/quic_packets.h"
 #include "quiche/quic/core/quic_process_packet_interface.h"
@@ -20,6 +18,8 @@
 #include "quiche/quic/platform/api/quic_socket_address.h"
 
 #if defined(QUICHE_MOQ_TRACE)
+#include <cerrno>
+
 #include <quic_trace/trace.hpp>
 #endif
 
@@ -69,11 +69,14 @@ bool QuicPacketReader::ReadAndDispatchPackets(
   info_bits.Set(QuicUdpPacketInfoBit::TOS);
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
+  // The socket API reports failures only through errno, so a read that
+  // returns no packets leaves the cause there.
+  errno = 0;
 #endif
-  int read_error = 0;
-  size_t packets_read = socket_api_.ReadMultiplePackets(
-      fd, info_bits, &read_results_, &read_error);
+  size_t packets_read =
+      socket_api_.ReadMultiplePackets(fd, info_bits, &read_results_);
 #if defined(QUICHE_MOQ_TRACE)
+  const int read_error = errno;
   quic_trace::SocketStats trace_stats;
   trace_stats.buffers = packets_read;
   for (size_t i = 0; i < packets_read; ++i) {
