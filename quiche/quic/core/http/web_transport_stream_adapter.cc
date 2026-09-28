@@ -156,6 +156,9 @@ void WebTransportStreamAdapter::OnDataAvailable() {
   if (ReadableBytes() == 0 && !fin_readable) {
     return;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  session_->connection()->OnMoqTraceApplicationDelivery();
+#endif
   visitor_->OnCanRead();
 }
 
@@ -166,6 +169,9 @@ void WebTransportStreamAdapter::OnCanWriteNewData() {
     return;
   }
   if (visitor_ != nullptr) {
+#if defined(QUICHE_MOQ_TRACE)
+    session_->connection()->OnMoqTraceApplicationDelivery();
+#endif
     visitor_->OnCanWrite();
   }
 }

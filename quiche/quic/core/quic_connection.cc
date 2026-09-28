@@ -1586,10 +1586,9 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
   // all frames.
   MaybeUpdateAckTimeout();
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::PacketPhase trace_frame_process;
   if (moq_trace_rx_packet_.has_value()) {
-    trace_frame_process =
-        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS);
+    moq_trace_rx_frame_process_.emplace(
+        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
   }
 #endif
   visitor_->OnStreamFrame(frame);
@@ -1597,7 +1596,11 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
   const quic_trace_packet_outcome trace_outcome =
       connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
                  : QUIC_TRACE_PACKET_OUTCOME_DROPPED;
-  trace_frame_process.finish(trace_outcome);
+  // Application delivery may already have ended the phase.
+  if (moq_trace_rx_frame_process_.has_value()) {
+    moq_trace_rx_frame_process_->finish(trace_outcome);
+    moq_trace_rx_frame_process_.reset();
+  }
   if (moq_trace_rx_packet_.has_value() && frame.data_length != 0) {
     moq_trace_rx_packet_->stream_frame(
         frame.stream_id, frame.offset, frame.offset + frame.data_length,
@@ -2477,7 +2480,18 @@ void QuicConnection::OnPacketComplete() {
 }
 
 #if defined(QUICHE_MOQ_TRACE)
+void QuicConnection::OnMoqTraceApplicationDelivery() {
+  if (moq_trace_rx_frame_process_.has_value()) {
+    moq_trace_rx_frame_process_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    moq_trace_rx_frame_process_.reset();
+  }
+}
+
 void QuicConnection::FinishMoqTracePacket(quic_trace_packet_outcome outcome) {
+  if (moq_trace_rx_frame_process_.has_value()) {
+    moq_trace_rx_frame_process_->finish(outcome);
+    moq_trace_rx_frame_process_.reset();
+  }
   if (moq_trace_rx_header_parse_.has_value()) {
     moq_trace_rx_header_parse_->finish(outcome);
     moq_trace_rx_header_parse_.reset();

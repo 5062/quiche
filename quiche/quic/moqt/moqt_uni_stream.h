@@ -295,6 +295,8 @@ class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
   };
 
   void StartTraceObject(const PublishedObjectMetadata& metadata);
+  void TraceFragmentStored(const PublishedObjectMetadata& metadata,
+                           uint64_t store_start_ns, bool first_fragment);
 
   std::optional<moq_trace::Object> trace_object_;
   std::optional<PendingTraceHeader> trace_header_;

@@ -78,6 +78,10 @@ void WebTransportHttp3::AssociateStream(QuicStreamId stream_id) {
                                     session_->perspective())) {
     return;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  // The visitor may accept and read the stream before returning.
+  session_->connection()->OnMoqTraceApplicationDelivery();
+#endif
   if (QuicUtils::IsBidirectionalStreamId(stream_id, version)) {
     incoming_bidirectional_streams_.push_back(stream_id);
     visitor_->OnIncomingBidirectionalStreamAvailable();

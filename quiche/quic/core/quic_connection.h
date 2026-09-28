@@ -923,6 +923,11 @@ class QUICHE_EXPORT QuicConnection
   uint64_t moq_trace_connection_id() const {
     return moq_trace_connection_id_;
   }
+
+  // Ends the open RX FRAME_PROCESS phase before synchronous application work.
+  // QUICHE hands stream data to the application while the STREAM frame is
+  // still being processed, and that work is not transport frame processing.
+  void OnMoqTraceApplicationDelivery();
 #endif
 
   const QuicConnectionId& client_connection_id() const {
@@ -2493,6 +2498,7 @@ class QUICHE_EXPORT QuicConnection
   std::optional<quic_trace::PacketPhase> moq_trace_rx_header_parse_;
   std::optional<quic_trace::PacketPhase> moq_trace_rx_header_unprotect_;
   std::optional<quic_trace::PacketPhase> moq_trace_rx_payload_decrypt_;
+  std::optional<quic_trace::PacketPhase> moq_trace_rx_frame_process_;
   size_t moq_trace_rx_packet_length_ = 0;
 #endif
 

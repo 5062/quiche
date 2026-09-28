@@ -41,6 +41,10 @@ struct PublishedObjectMetadata {
   // The relay cache assigns this sidecar identity through its const visitor
   // interface when it accepts the first fragment.
   mutable std::optional<moq_trace::LogicalId> trace_logical_id;
+  // The relay cache records when it finished storing a fragment, before it
+  // notifies listeners. Listener fan-out runs synchronously inside the same
+  // call, and this timestamp keeps that work out of the inbound object phases.
+  mutable std::optional<uint64_t> trace_stored_ns;
 #endif
   bool IsMalformed(const PublishedObjectMetadata& other,
                    bool ignore_status = false) const {

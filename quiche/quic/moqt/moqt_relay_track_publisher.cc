@@ -217,6 +217,9 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
         // Data added to the object, which is still incomplete. Notify
         // listeners, but do not treat the placeholder status of an unfinished
         // object as track state.
+#if defined(QUICHE_MOQ_TRACE)
+        metadata.trace_stored_ns = quic_trace::now_ns();
+#endif
         for (MoqtObjectListener* listener : listeners_) {
           listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
                                          metadata.publisher_priority);
@@ -235,6 +238,9 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     // Only a fragment of a new object arrived. The status of a partial object
     // is a placeholder that the final fragment can still change, so track state
     // must not advance until the payload is complete.
+#if defined(QUICHE_MOQ_TRACE)
+    metadata.trace_stored_ns = quic_trace::now_ns();
+#endif
     for (MoqtObjectListener* listener : listeners_) {
       listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
                                      metadata.publisher_priority);
@@ -257,6 +263,9 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     default:
       break;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  metadata.trace_stored_ns = quic_trace::now_ns();
+#endif
   for (MoqtObjectListener* listener : listeners_) {
     listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
                                    metadata.publisher_priority);

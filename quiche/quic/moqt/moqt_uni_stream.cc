@@ -520,32 +520,18 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
       metadata.payload_length = message.payload_length;
       metadata.arrival_time = clock_->Now();
 #if defined(QUICHE_MOQ_TRACE)
-      std::optional<uint64_t> create_start_ns;
-      std::optional<uint64_t> commit_start_ns;
-      if (trace_object_.has_value() && bytes_received_this_object_ == 0) {
-        create_start_ns = quic_trace::now_ns();
-      } else if (trace_header_.has_value() && bytes_received_this_object_ == 0) {
-        create_start_ns = quic_trace::now_ns();
-      }
-      if ((trace_object_.has_value() || trace_header_.has_value()) &&
-          end_of_message) {
-        commit_start_ns = quic_trace::now_ns();
+      std::optional<uint64_t> store_start_ns;
+      if (trace_object_.has_value() || trace_header_.has_value()) {
+        store_start_ns = quic_trace::now_ns();
       }
 #endif
       visitor_->OnObjectFragment(track->full_track_name(), metadata, payload,
                                  bytes_received_this_object_);
 #if defined(QUICHE_MOQ_TRACE)
       StartTraceObject(metadata);
-      const uint64_t fragment_end_ns = quic_trace::now_ns();
-      if (trace_object_.has_value() && create_start_ns.has_value()) {
-        auto create = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_CREATE,
-                                              *create_start_ns);
-        create.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, fragment_end_ns);
-      }
-      if (trace_object_.has_value() && commit_start_ns.has_value()) {
-        auto commit = trace_object_->phase_at(
-            MOQ_TRACE_OBJECT_PHASE_FRAME_COMMIT, *commit_start_ns);
-        commit.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, fragment_end_ns);
+      if (store_start_ns.has_value()) {
+        TraceFragmentStored(metadata, *store_start_ns,
+                            /*first_fragment=*/bytes_received_this_object_ == 0);
       }
 #endif
     }
@@ -614,6 +600,34 @@ void IncomingDataStream::StartTraceObject(
   header_phase.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS,
                          trace_header_->end_ns);
   trace_object_->set_stream_offset_end(trace_header_->end_offset);
+}
+
+// The phases of one fragment run back to back. PayloadRead covers the stream's
+// handling of the fragment up to the cache. The cache's storing of the fragment
+// is Create for the first fragment and FrameCommit for each later one, so a
+// fragment never reports both. Storage ends where the relay cache starts
+// notifying listeners, because that fan-out is outbound work.
+void IncomingDataStream::TraceFragmentStored(
+    const PublishedObjectMetadata& metadata, uint64_t store_start_ns,
+    bool first_fragment) {
+  const uint64_t stored_ns =
+      metadata.trace_stored_ns.has_value() ? *metadata.trace_stored_ns
+                                           : quic_trace::now_ns();
+  if (!trace_object_.has_value()) {
+    trace_payload_start_ns_.reset();
+    return;
+  }
+  if (trace_payload_start_ns_.has_value()) {
+    auto payload = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ,
+                                           *trace_payload_start_ns_);
+    payload.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, store_start_ns);
+    trace_payload_start_ns_.reset();
+  }
+  auto store = trace_object_->phase_at(
+      first_fragment ? MOQ_TRACE_OBJECT_PHASE_CREATE
+                     : MOQ_TRACE_OBJECT_PHASE_FRAME_COMMIT,
+      store_start_ns);
+  store.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, stored_ns);
 }
 
 void IncomingDataStream::OnObjectPayloadConsumed(size_t,

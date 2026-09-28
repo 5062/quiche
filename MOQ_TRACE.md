@@ -30,8 +30,9 @@ MoQ object lifecycles, one event stream per logical object:
 | Call site | Emission |
 | --- | --- |
 | `MoqtDataParser::ParseNextItemFromStream`, `kObjectId` | object start, header parse phase |
-| `IncomingDataStream::OnObjectMessage` | create phase on the first fragment, frame commit phase on the last, payload read phase per fragment |
-| `IncomingDataStream::OnObjectPayloadConsumed` | payload read and object end, per fragment or once per object |
+| `IncomingDataStream::OnObjectMessage` | per fragment, a payload read phase followed by a create phase (first fragment) or a frame commit phase (each later fragment) |
+| `MoqtRelayTrackPublisher::OnObjectFragment` | the storage timestamp that ends the create or frame commit phase |
+| `IncomingDataStream::OnObjectPayloadConsumed` | object end, and payload read for a fragment that never reached the cache |
 | `OutgoingSubgroupStream::SendObjects` | clone phase, one TX object per subscriber copy |
 | `OutgoingUniStream::WriteObjectToStream` | header encode phase, payload write phase |
 
@@ -48,6 +49,26 @@ code:
 
 No sampling is applied. Analysis selects the packets that carry the objects it
 measures.
+
+## Synchronous delivery
+
+QUICHE runs the application inside packet processing. A STREAM frame reaches the
+MoQT parser, the relay cache, and every subscriber's outbound stream before
+`QuicConnection::OnStreamFrame` returns. The instrumentation keeps that work out
+of the phases that describe other layers:
+
+- RX object phases are sequential per fragment. Payload read ends where the
+  fragment enters the relay cache, and create or frame commit ends where the
+  cache starts notifying listeners. Listener fan-out is outbound work and falls
+  in no inbound phase.
+- The RX `frame_process` phase ends when the application is first called, from
+  `WebTransportStreamAdapter` stream callbacks or from
+  `WebTransportHttp3::AssociateStream` when a peer opens a stream. It covers
+  QUIC and HTTP/3 frame handling only.
+- The RX packet lifecycle still ends in `OnPacketComplete`, so `rx_packet_span`
+  includes the application work that ran synchronously inside it. The transport
+  schema has no phase for that interval, so QUICHE packet spans are not
+  comparable with Quinn, which ends a packet before the application reads it.
 
 ## Identity and fragmentation contract
 
