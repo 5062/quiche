@@ -1418,7 +1418,11 @@ void MoqtDataParser::ParseNextItemFromStream() {
 
     case kObjectId: {
 #if defined(QUICHE_MOQ_TRACE)
-      if (!trace_object_start_ns_.has_value()) {
+      // The parser revisits this state as soon as the previous object ends,
+      // before any byte of the next one is readable. Stamp the start only once
+      // header bytes are present, so the object excludes the idle gap.
+      if (!trace_object_start_ns_.has_value() &&
+          !stream_.PeekNextReadableRegion().peeked_data.empty()) {
         trace_object_start_ns_ = quic_trace::now_ns();
         trace_object_start_offset_ = stream_.ReadOffset();
       }
