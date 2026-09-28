@@ -924,10 +924,23 @@ class QUICHE_EXPORT QuicConnection
     return moq_trace_connection_id_;
   }
 
-  // Ends the open RX FRAME_PROCESS phase before synchronous application work.
-  // QUICHE hands stream data to the application while the STREAM frame is
-  // still being processed, and that work is not transport frame processing.
-  void OnMoqTraceApplicationDelivery();
+  // Records a synchronous application callback as the RX `application` phase.
+  // QUICHE hands stream data to the application while it still processes the
+  // inbound packet, and that work is not transport processing. Entering the
+  // outermost scope ends the open `frame_process` phase so the two never
+  // overlap. Nested scopes extend the outermost one. Outside packet processing
+  // a scope records nothing.
+  class QUICHE_EXPORT MoqTraceApplicationScope {
+   public:
+    explicit MoqTraceApplicationScope(QuicConnection* connection);
+    ~MoqTraceApplicationScope();
+    MoqTraceApplicationScope(const MoqTraceApplicationScope&) = delete;
+    MoqTraceApplicationScope& operator=(const MoqTraceApplicationScope&) =
+        delete;
+
+   private:
+    QuicConnection* connection_;
+  };
 #endif
 
   const QuicConnectionId& client_connection_id() const {
@@ -2499,6 +2512,8 @@ class QUICHE_EXPORT QuicConnection
   std::optional<quic_trace::PacketPhase> moq_trace_rx_header_unprotect_;
   std::optional<quic_trace::PacketPhase> moq_trace_rx_payload_decrypt_;
   std::optional<quic_trace::PacketPhase> moq_trace_rx_frame_process_;
+  std::optional<quic_trace::PacketPhase> moq_trace_rx_application_;
+  int moq_trace_application_depth_ = 0;
   size_t moq_trace_rx_packet_length_ = 0;
 #endif
 

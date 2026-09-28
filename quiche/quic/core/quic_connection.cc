@@ -2480,14 +2480,40 @@ void QuicConnection::OnPacketComplete() {
 }
 
 #if defined(QUICHE_MOQ_TRACE)
-void QuicConnection::OnMoqTraceApplicationDelivery() {
-  if (moq_trace_rx_frame_process_.has_value()) {
-    moq_trace_rx_frame_process_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-    moq_trace_rx_frame_process_.reset();
+QuicConnection::MoqTraceApplicationScope::MoqTraceApplicationScope(
+    QuicConnection* connection)
+    : connection_(connection) {
+  if (connection_->moq_trace_application_depth_++ > 0) {
+    return;
+  }
+  if (connection_->moq_trace_rx_frame_process_.has_value()) {
+    connection_->moq_trace_rx_frame_process_->finish(
+        QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    connection_->moq_trace_rx_frame_process_.reset();
+  }
+  if (connection_->moq_trace_rx_packet_.has_value()) {
+    connection_->moq_trace_rx_application_.emplace(
+        connection_->moq_trace_rx_packet_->phase(
+            QUIC_TRACE_PACKET_PHASE_APPLICATION));
+  }
+}
+
+QuicConnection::MoqTraceApplicationScope::~MoqTraceApplicationScope() {
+  if (--connection_->moq_trace_application_depth_ > 0) {
+    return;
+  }
+  if (connection_->moq_trace_rx_application_.has_value()) {
+    connection_->moq_trace_rx_application_->finish(
+        QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    connection_->moq_trace_rx_application_.reset();
   }
 }
 
 void QuicConnection::FinishMoqTracePacket(quic_trace_packet_outcome outcome) {
+  if (moq_trace_rx_application_.has_value()) {
+    moq_trace_rx_application_->finish(outcome);
+    moq_trace_rx_application_.reset();
+  }
   if (moq_trace_rx_frame_process_.has_value()) {
     moq_trace_rx_frame_process_->finish(outcome);
     moq_trace_rx_frame_process_.reset();

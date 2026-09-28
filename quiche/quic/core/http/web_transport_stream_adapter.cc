@@ -157,7 +157,8 @@ void WebTransportStreamAdapter::OnDataAvailable() {
     return;
   }
 #if defined(QUICHE_MOQ_TRACE)
-  session_->connection()->OnMoqTraceApplicationDelivery();
+  QuicConnection::MoqTraceApplicationScope trace_application(
+      session_->connection());
 #endif
   visitor_->OnCanRead();
 }
@@ -170,7 +171,8 @@ void WebTransportStreamAdapter::OnCanWriteNewData() {
   }
   if (visitor_ != nullptr) {
 #if defined(QUICHE_MOQ_TRACE)
-    session_->connection()->OnMoqTraceApplicationDelivery();
+    QuicConnection::MoqTraceApplicationScope trace_application(
+        session_->connection());
 #endif
     visitor_->OnCanWrite();
   }

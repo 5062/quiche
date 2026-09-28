@@ -61,14 +61,19 @@ of the phases that describe other layers:
   fragment enters the relay cache, and create or frame commit ends where the
   cache starts notifying listeners. Listener fan-out is outbound work and falls
   in no inbound phase.
-- The RX `frame_process` phase ends when the application is first called, from
-  `WebTransportStreamAdapter` stream callbacks or from
-  `WebTransportHttp3::AssociateStream` when a peer opens a stream. It covers
-  QUIC and HTTP/3 frame handling only.
+- Each application callback made while an inbound packet is being processed
+  runs inside `QuicConnection::MoqTraceApplicationScope` and is recorded as the
+  RX `application` packet phase. The scopes sit in the `WebTransportStreamAdapter`
+  read and write callbacks and in `WebTransportHttp3::AssociateStream`, where
+  MoQT accepts and reads a new stream. Nested callbacks extend one phase.
+- The RX `frame_process` phase ends when the first application scope opens, so
+  it covers QUIC and HTTP/3 frame handling only. Transport work that follows the
+  callback within the same frame is not measured.
 - The RX packet lifecycle still ends in `OnPacketComplete`, so `rx_packet_span`
-  includes the application work that ran synchronously inside it. The transport
-  schema has no phase for that interval, so QUICHE packet spans are not
-  comparable with Quinn, which ends a packet before the application reads it.
+  includes the synchronous application work. `rx_packet_transport_span`
+  subtracts the `application` phases and is the figure to compare with Quinn,
+  which never records the phase because it ends a packet before the application
+  reads it.
 
 ## Identity and fragmentation contract
 
