@@ -72,6 +72,9 @@ TEST(PublishedObjectMetadataTest, IsMalformed) {
 
   other.status = MoqtObjectStatus::kObjectDoesNotExist;
   EXPECT_TRUE(metadata.IsMalformed(other));
+  EXPECT_FALSE(metadata.IsMalformed(other, /*ignore_status=*/true));
+  other.publisher_priority = 5;
+  EXPECT_TRUE(metadata.IsMalformed(other, /*ignore_status=*/true));
   other = metadata;
 
   other.publisher_priority = 5;

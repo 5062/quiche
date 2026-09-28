@@ -1586,10 +1586,10 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
   // all frames.
   MaybeUpdateAckTimeout();
 #if defined(QUICHE_MOQ_TRACE)
-  std::optional<quic_trace::PacketPhase> trace_frame_process;
+  quic_trace::PacketPhase trace_frame_process;
   if (moq_trace_rx_packet_.has_value()) {
-    trace_frame_process.emplace(
-        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
+    trace_frame_process =
+        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS);
   }
 #endif
   visitor_->OnStreamFrame(frame);
@@ -1597,9 +1597,7 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
   const quic_trace_packet_outcome trace_outcome =
       connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
                  : QUIC_TRACE_PACKET_OUTCOME_DROPPED;
-  if (trace_frame_process.has_value()) {
-    trace_frame_process->finish(trace_outcome);
-  }
+  trace_frame_process.finish(trace_outcome);
   if (moq_trace_rx_packet_.has_value() && frame.data_length != 0) {
     moq_trace_rx_packet_->stream_frame(
         frame.stream_id, frame.offset, frame.offset + frame.data_length,

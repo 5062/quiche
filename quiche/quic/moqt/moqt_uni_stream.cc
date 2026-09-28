@@ -56,18 +56,15 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
   header.payload_length = object.metadata.payload_length;
 
 #if defined(QUICHE_MOQ_TRACE)
-  std::optional<moq_trace::ObjectPhase> header_phase;
+  moq_trace::ObjectPhase header_phase;
   if (trace_object_.has_value()) {
-    header_phase.emplace(
-        trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_HEADER_ENCODE));
+    header_phase = trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_HEADER_ENCODE);
   }
 #endif
   quiche::QuicheBuffer serialized_header =
       framer_.SerializeObjectHeader(header, type, last_object_);
 #if defined(QUICHE_MOQ_TRACE)
-  if (header_phase.has_value()) {
-    header_phase->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
-  }
+  header_phase.finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
 #endif
   std::vector<quiche::QuicheMemSlice> write_vector;
   write_vector.reserve(object.payload.size() + 1);
@@ -78,10 +75,9 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
   webtransport::StreamWriteOptions options;
   options.set_send_fin(!type.IsFetch() && object.fin_after_this);
 #if defined(QUICHE_MOQ_TRACE)
-  std::optional<moq_trace::ObjectPhase> write_phase;
+  moq_trace::ObjectPhase write_phase;
   if (trace_object_.has_value()) {
-    write_phase.emplace(
-        trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE));
+    write_phase = trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
   }
 #endif
   absl::Status write_status =
@@ -90,10 +86,8 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
   if (trace_object_.has_value()) {
     trace_object_->set_stream_offset_end(stream_.WriteOffset());
   }
-  if (write_phase.has_value()) {
-    write_phase->finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
-                                          : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
-  }
+  write_phase.finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                     : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
 #endif
   if (!write_status.ok()) {
     QUICHE_BUG(MoqtSession_WriteObjectToStream_write_failed)
@@ -244,10 +238,9 @@ void OutgoingSubgroupStream::SendObjects() {
       webtransport::StreamWriteOptions options;
       options.set_send_fin(object->fin_after_this);
 #if defined(QUICHE_MOQ_TRACE)
-      std::optional<moq_trace::ObjectPhase> write_phase;
+      moq_trace::ObjectPhase write_phase;
       if (trace_object().has_value()) {
-        write_phase.emplace(
-            trace_object()->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE));
+        write_phase = trace_object()->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
       }
 #endif
       absl::Status write_status =
@@ -256,11 +249,8 @@ void OutgoingSubgroupStream::SendObjects() {
       if (trace_object().has_value()) {
         trace_object()->set_stream_offset_end(stream().WriteOffset());
       }
-      if (write_phase.has_value()) {
-        write_phase->finish(write_status.ok()
-                                ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
-                                : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
-      }
+      write_phase.finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                         : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
 #endif
       if (!write_status.ok()) {
         QUICHE_BUG(MoqtSession_WriteObjectToStream_write_failed)

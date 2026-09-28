@@ -190,16 +190,12 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     }
   }
   if (duplicate_object != nullptr) {
-    PublishedObjectMetadata known = duplicate_object->metadata();
-    if (known.payload_length > duplicate_object->payload_received()) {
-      // A partial object reports kNormal until its last fragment arrives,
-      // because the wire format only reveals the end of a group through the
-      // stream FIN. That placeholder says nothing about the finished object, so
-      // it must not be compared against a fragment that carries the final
-      // status.
-      known.status = metadata.status;
-    }
-    if (metadata.IsMalformed(known)) {
+    const PublishedObjectMetadata& known = duplicate_object->metadata();
+    const bool incomplete =
+        known.payload_length > duplicate_object->payload_received();
+    // A partial object's kNormal status is a placeholder until the final
+    // fragment reveals the stream FIN. Validate its other immutable fields.
+    if (metadata.IsMalformed(known, /*ignore_status=*/incomplete)) {
       // Something besides the arrival time and extension headers changed.
       OnMalformedTrack(full_track_name);
       return;
@@ -212,13 +208,12 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     metadata.trace_logical_id = duplicate_object->metadata().trace_logical_id;
 #endif
     // This could complete an incomplete object.
-    if (duplicate_object->metadata().payload_length >
-        duplicate_object->payload_received()) {
+    if (incomplete) {
       if (!duplicate_object->Append(offset, object)) {
         return;
       }
       if (duplicate_object->payload_received() <
-          duplicate_object->metadata().payload_length) {
+          known.payload_length) {
         // Data added to the object, which is still incomplete. Notify
         // listeners, but do not treat the placeholder status of an unfinished
         // object as track state.

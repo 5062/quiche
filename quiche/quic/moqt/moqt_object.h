@@ -42,10 +42,11 @@ struct PublishedObjectMetadata {
   // interface when it accepts the first fragment.
   mutable std::optional<moq_trace::LogicalId> trace_logical_id;
 #endif
-  bool IsMalformed(const PublishedObjectMetadata& other) const {
-    // It's OK for arrival_time to be different when checking immutables.
+  bool IsMalformed(const PublishedObjectMetadata& other,
+                   bool ignore_status = false) const {
+    // Arrival time can differ. Ignore placeholder status for partial objects.
     return (location != other.location || subgroup != other.subgroup ||
-            status != other.status ||
+            (!ignore_status && status != other.status) ||
             publisher_priority != other.publisher_priority);
   }
   bool operator==(const PublishedObjectMetadata& other) const = default;
