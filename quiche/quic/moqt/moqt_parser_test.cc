@@ -35,6 +35,10 @@
 #include "quiche/common/test_tools/quiche_test_utils.h"
 #include "quiche/web_transport/test_tools/in_memory_stream.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
+
 namespace moqt::test {
 
 namespace {
@@ -559,6 +563,44 @@ TEST_F(MoqtMessageSpecificTest, StreamHeaderSubgroupFollowOn) {
   EXPECT_EQ(data_visitor.object_payload(), "bar");
   EXPECT_FALSE(data_visitor.parsing_error().has_value());
 }
+
+#if defined(QUICHE_MOQ_TRACE)
+// Records the header timestamps the parser reports for each object.
+class HeaderTimingVisitor : public MoqtParserTestVisitor {
+ public:
+  void OnObjectHeader(const MoqtObject& /*message*/, uint64_t start_ns,
+                      uint64_t /*start_offset*/, uint64_t /*end_ns*/,
+                      uint64_t /*end_offset*/) override {
+    header_starts_.push_back(start_ns);
+  }
+  const std::vector<uint64_t>& header_starts() const { return header_starts_; }
+
+ private:
+  std::vector<uint64_t> header_starts_;
+};
+
+// The parser returns to the object ID state as soon as an object ends, before
+// the next object's bytes exist. The next header must be timed from when its
+// bytes arrive, not from the end of the previous object.
+TEST_F(MoqtMessageSpecificTest, FollowOnObjectHeaderStartsWhenBytesArrive) {
+  webtransport::test::InMemoryStream stream(/*stream_id=*/0);
+  HeaderTimingVisitor data_visitor;
+  MoqtDataParser parser(&stream, &data_visitor);
+  MoqtDataStreamType type = MoqtDataStreamType::Subgroup(0, 1, false, false);
+  auto message1 = std::make_unique<StreamHeaderSubgroupMessage>(type);
+  stream.Receive(message1->PacketSample(), false);
+  parser.ReadAllData();
+  ASSERT_EQ(data_visitor.header_starts().size(), 1u);
+
+  const uint64_t second_object_arrival_ns = quic_trace::now_ns();
+  auto message2 = std::make_unique<StreamMiddlerSubgroupMessage>(type);
+  stream.Receive(message2->PacketSample(), false);
+  parser.ReadAllData();
+  ASSERT_EQ(data_visitor.header_starts().size(), 2u);
+  EXPECT_GE(data_visitor.header_starts()[1], second_object_arrival_ns);
+  EXPECT_FALSE(data_visitor.parsing_error().has_value());
+}
+#endif
 
 TEST_F(MoqtMessageSpecificTest, StreamHeaderSubgroupFollowOnExpandedVarInts) {
   webtransport::test::InMemoryStream stream(/*stream_id=*/0);
