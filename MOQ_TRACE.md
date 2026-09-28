@@ -44,8 +44,8 @@ code:
 | `QuicConnection::OnPacket`, `QuicConnection::FinishMoqTracePacket` | RX packet start and end, with the outcome |
 | `QuicConnection` public header, header unprotect, payload decrypt, frame processing | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, `frame_process` |
 | `QuicConnection::OnStreamFrame` | STREAM frame byte range and FIN |
-| `QuicPacketCreator::CreateAndSerializeStreamFrame`, `CreateAndSerializePacket` | TX packet start and end, phases `frame_encode` and `packet_encrypt` |
-| `QuicPacketReader::ReadAndDispatchPackets`, `QuicConnection` socket reads and writes | UDP socket start and end with buffer, datagram, and byte counts |
+| `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start and end, phases `frame_encode` and `packet_encrypt` |
+| `QuicPacketReader::ReadAndDispatchPackets`, `QuicConnection::SendPacketToWriter` | UDP socket start and end with buffer, datagram, and byte counts; an `ECONNRESET` read records `connection_reset` |
 
 No sampling is applied. Analysis selects the packets that carry the objects it
 measures.

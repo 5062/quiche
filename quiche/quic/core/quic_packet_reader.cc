@@ -82,12 +82,15 @@ bool QuicPacketReader::ReadAndDispatchPackets(
       trace_stats.bytes += read_results_[i].packet_buffer.buffer_len;
     }
   }
-  const quic_trace_socket_outcome trace_outcome =
-      packets_read > 0 || read_error == 0
-          ? QUIC_TRACE_SOCKET_OUTCOME_SUCCESS
-          : (read_error == EAGAIN || read_error == EWOULDBLOCK
-                 ? QUIC_TRACE_SOCKET_OUTCOME_WOULD_BLOCK
-                 : QUIC_TRACE_SOCKET_OUTCOME_ERROR);
+  quic_trace_socket_outcome trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_ERROR;
+  if (packets_read > 0 || read_error == 0) {
+    trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_SUCCESS;
+  } else if (read_error == EAGAIN || read_error == EWOULDBLOCK) {
+    trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_WOULD_BLOCK;
+  } else if (read_error == ECONNRESET) {
+    // An ICMP error queued on the socket, as Quinn records it.
+    trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_CONNECTION_RESET;
+  }
   trace_socket.finish(trace_outcome, trace_stats);
 #endif
   if (GetQuicReloadableFlag(quic_move_clock_now)) {
