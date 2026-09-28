@@ -143,16 +143,13 @@ events, DuckDB file, and peer logs.
 
 ## Bring-up fixes beyond instrumentation
 
-Three fixes belong to this fork and are not tracepoints:
+Two fixes belong to this fork and are not tracepoints:
 
 1. `MoqtControlMessageParser::ReadTrackNamespace` accepts an empty namespace when
    parsing a SUBSCRIBE_NAMESPACE prefix. Draft-16 section 9.25 allows an empty
    prefix and the benchmark peer sends one. Unit tested by
    `EmptySubscribeNamespacePrefix`.
-2. `MoqtRelay::MoqtRelay` assigns the resolved client event loop to
-   `client_event_loop_`, and destroys the upstream client before the server that
-   owns that loop. Unit tested by `DefaultUpstreamUsesServerEventLoop`.
-3. `MoqtRelayTrackPublisher::OnObjectFragment` tolerates a status change on an
+2. `MoqtRelayTrackPublisher::OnObjectFragment` tolerates a status change on an
    object that arrived in fragments. Draft-16 signals the end of a group with the
    stream FIN, so the fragment that completes an object carries `kEndOfGroup`
    while the earlier fragments of the same object carried the `kNormal`

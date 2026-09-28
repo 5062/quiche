@@ -176,26 +176,26 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     if (!object.empty()) {
       slice = quiche::QuicheMemSlice::Copy(object);
     }
-    auto it = subgroup.find(metadata.location.object);
-    if (it == subgroup.end()) {
-      PublishedObjectMetadata cached_metadata = metadata;
-#if defined(QUICHE_MOQ_TRACE)
-      cached_metadata.trace_logical_id = moq_trace::next_logical_id();
-      metadata.trace_logical_id = cached_metadata.trace_logical_id;
-#endif
-      subgroup.try_emplace(metadata.location.object, cached_metadata,
-                           std::move(slice), last_object_in_stream);
-    } else {
+    auto [it, inserted] =
+        subgroup.try_emplace(metadata.location.object, metadata,
+                             std::move(slice), last_object_in_stream);
+    if (!inserted) {
       duplicate_object = &it->second;
     }
+#if defined(QUICHE_MOQ_TRACE)
+    if (inserted) {
+      metadata.trace_logical_id = moq_trace::next_logical_id();
+      it->second.metadata().trace_logical_id = metadata.trace_logical_id;
+    }
+#endif
   }
   if (duplicate_object != nullptr) {
-    const PublishedObjectMetadata& known = duplicate_object->metadata();
-    const bool incomplete =
-        known.payload_length > duplicate_object->payload_received();
+    const bool incomplete = duplicate_object->metadata().payload_length >
+                            duplicate_object->payload_received();
     // A partial object's kNormal status is a placeholder until the final
     // fragment reveals the stream FIN. Validate its other immutable fields.
-    if (metadata.IsMalformed(known, /*ignore_status=*/incomplete)) {
+    if (metadata.IsMalformed(duplicate_object->metadata(),
+                             /*ignore_status=*/incomplete)) {
       // Something besides the arrival time and extension headers changed.
       OnMalformedTrack(full_track_name);
       return;
@@ -213,7 +213,7 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
         return;
       }
       if (duplicate_object->payload_received() <
-          known.payload_length) {
+          duplicate_object->metadata().payload_length) {
         // Data added to the object, which is still incomplete. Notify
         // listeners, but do not treat the placeholder status of an unfinished
         // object as track state.
@@ -233,7 +233,6 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       return;
     }
   }
-  // The object is valid and complete. Update state.
   if (duplicate_object == nullptr && metadata.payload_length > object.length()) {
     // Only a fragment of a new object arrived. The status of a partial object
     // is a placeholder that the final fragment can still change, so track state
@@ -247,6 +246,7 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     }
     return;
   }
+  // Object is valid. Update state.
   if (next_location_ <= metadata.location) {
     next_location_ = metadata.location.Next();
   }
