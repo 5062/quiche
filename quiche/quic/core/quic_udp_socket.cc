@@ -13,6 +13,7 @@
 
 #include "absl/base/optimization.h"
 #include "quiche/quic/core/io/socket.h"
+#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 #include "quiche/quic/platform/api/quic_flag_utils.h"
 

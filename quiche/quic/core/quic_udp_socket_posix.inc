@@ -588,9 +588,25 @@ WriteResult QuicUdpSocketApi::WritePacket(
   }
 
   int rc;
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX);
+#endif
   do {
     rc = sendmsg(fd, &hdr, 0);
   } while (rc < 0 && errno == EINTR);
+#if defined(QUICHE_MOQ_TRACE)
+  const int write_error = rc < 0 ? errno : 0;
+  quic_trace::SocketStats trace_stats;
+  if (rc >= 0) {
+    trace_stats.buffers = 1;
+    trace_stats.datagrams = 1;
+    trace_stats.bytes = rc;
+  }
+  trace_socket.finish(MoqTraceSocketOutcome(write_error), trace_stats);
+  if (rc < 0) {
+    errno = write_error;
+  }
+#endif
   if (rc >= 0) {
     return WriteResult(WRITE_STATUS_OK, rc);
   }

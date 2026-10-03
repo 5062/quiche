@@ -54,6 +54,19 @@ class QuicConnectionPeer {
  public:
   QuicConnectionPeer() = delete;
 
+#if defined(QUICHE_MOQ_TRACE)
+  // Whether packet processing still owns an RX trace, including disabled
+  // traces.
+  static bool HasMoqTraceRxPacket(const QuicConnection& connection) {
+    return connection.moq_trace_rx_packet_.has_value();
+  }
+
+  // Encoded length currently assigned to the packet being processed.
+  static size_t MoqTraceRxPacketLength(const QuicConnection& connection) {
+    return connection.moq_trace_rx_packet_length_;
+  }
+#endif
+
   static void SetSendAlgorithm(QuicConnection* connection,
                                SendAlgorithmInterface* send_algorithm);
 

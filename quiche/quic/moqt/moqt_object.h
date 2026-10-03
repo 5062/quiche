@@ -82,10 +82,24 @@ class CachedObject {
   // Add |payload| at |offset|. Checks for overlaps in data. Returns false if
   // the payload is too large, or there is no new data.
   bool Append(uint64_t offset, absl::string_view payload);
+  // Commit the final status and FIN of a complete payload before notifying
+  // readers.
+  void Complete(MoqtObjectStatus status, bool fin_after_this);
   // Returns a PublishedObject with only the portion of payload starting at
   // |offset|.
   PublishedObject ToPublishedObject(uint64_t offset = 0) const;
-  const PublishedObjectMetadata& metadata() const { return metadata_; }
+  // Snapshot metadata under the payload lock, including its finalized status.
+  PublishedObjectMetadata metadata() const {
+    absl::MutexLock lock(mutex_);
+    return metadata_;
+  }
+#if defined(QUICHE_MOQ_TRACE)
+  // Assign the cache's logical identity before publishing any fragment.
+  void SetTraceLogicalId(moq_trace::LogicalId logical_id) {
+    absl::MutexLock lock(mutex_);
+    metadata_.trace_logical_id = logical_id;
+  }
+#endif
   bool fin_after_this() const ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock(mutex_);
     return fin_after_this_;
@@ -112,7 +126,7 @@ class CachedObject {
   uint64_t payload_received_locked() const { return payload_.size(); }
 
   mutable absl::Mutex mutex_;
-  const PublishedObjectMetadata metadata_;
+  PublishedObjectMetadata ABSL_GUARDED_BY(mutex_) metadata_;
   absl::Cord payload_;
   // If true, this is the last object before FIN.
   bool ABSL_GUARDED_BY(mutex_) fin_after_this_;

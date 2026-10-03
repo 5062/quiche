@@ -4,6 +4,9 @@
 
 module(name = "quiche")
 
+# Expose the Linux constraint used by the standalone batch-writer tests.
+bazel_dep(name = "platforms", version = "1.0.0")
+
 # Last updated 2025-09-09
 bazel_dep(name = "bazel_skylib", version = "1.8.1")
 

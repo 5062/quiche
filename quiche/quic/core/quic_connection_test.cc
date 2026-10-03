@@ -215,6 +215,19 @@ class TestConnection : public QuicConnection {
 
   MOCK_METHOD(void, OnSerializedPacket, (SerializedPacket packet), (override));
 
+#if defined(QUICHE_MOQ_TRACE)
+  // Observe packet lengths at the authenticated header boundary, after
+  // splitting.
+  bool OnPacketHeader(const QuicPacketHeader& header) override {
+    moq_trace_rx_lengths.push_back(
+        QuicConnectionPeer::MoqTraceRxPacketLength(*this));
+    return QuicConnection::OnPacketHeader(header);
+  }
+
+  // Encoded RX lengths observed during this test's real framer invocations.
+  std::vector<size_t> moq_trace_rx_lengths;
+#endif
+
   void OnEffectivePeerMigrationValidated(bool is_migration_linkable) override {
     QuicConnection::OnEffectivePeerMigrationValidated(is_migration_linkable);
     if (is_migration_linkable) {
@@ -3340,6 +3353,9 @@ TEST_P(QuicConnectionTest, DuplicatePacket) {
   // Send packet 3 again, but do not set the expectation that
   // the visitor OnStreamFrame() will be called.
   ProcessDataPacket(3);
+#if defined(QUICHE_MOQ_TRACE)
+  EXPECT_FALSE(QuicConnectionPeer::HasMoqTraceRxPacket(connection_));
+#endif
   EXPECT_EQ(QuicPacketNumber(3u), LargestAcked(connection_.ack_frame()));
   EXPECT_TRUE(IsMissing(2));
   EXPECT_TRUE(IsMissing(1));
@@ -9519,6 +9535,7 @@ TEST_P(QuicConnectionTest, CoalescedPacket) {
       ENCRYPTION_INITIAL, ENCRYPTION_INITIAL, ENCRYPTION_FORWARD_SECURE};
   char buffer[kMaxOutgoingPacketSize] = {};
   size_t total_encrypted_length = 0;
+  std::vector<size_t> encrypted_lengths;
   for (int i = 0; i < 3; i++) {
     QuicPacketHeader header =
         ConstructPacketHeader(packet_numbers[i], encryption_levels[i]);
@@ -9535,6 +9552,7 @@ TEST_P(QuicConnectionTest, CoalescedPacket) {
         buffer + total_encrypted_length,
         sizeof(buffer) - total_encrypted_length);
     EXPECT_GT(encrypted_length, 0u);
+    encrypted_lengths.push_back(encrypted_length);
     total_encrypted_length += encrypted_length;
   }
   connection_.ProcessUdpPacket(
@@ -9545,6 +9563,10 @@ TEST_P(QuicConnectionTest, CoalescedPacket) {
   }
 
   EXPECT_TRUE(connection_.connected());
+#if defined(QUICHE_MOQ_TRACE)
+  EXPECT_EQ(connection_.moq_trace_rx_lengths, encrypted_lengths);
+  EXPECT_FALSE(QuicConnectionPeer::HasMoqTraceRxPacket(connection_));
+#endif
 }
 
 // Regression test for crbug.com/992831.

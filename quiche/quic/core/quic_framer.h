@@ -91,6 +91,11 @@ class QUICHE_EXPORT QuicFramerVisitorInterface {
   // has been validated or processed.
   virtual void OnPacket() = 0;
 
+#if defined(QUICHE_MOQ_TRACE)
+  // Encoded size after validating the length and separating coalesced packets.
+  virtual void OnMoqTracePacketLength(size_t /*length*/) {}
+#endif
+
   // Called only when |perspective_| is IS_CLIENT and a version negotiation
   // packet has been parsed.
   virtual void OnVersionNegotiationPacket(

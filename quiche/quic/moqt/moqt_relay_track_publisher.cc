@@ -144,8 +144,8 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     auto& subgroup = subgroup_it.first->second;
     if (!subgroup.empty()) {  // Check if the new object is valid
       CachedObject& last_object = subgroup.rbegin()->second;
-      if (last_object.metadata().publisher_priority !=
-          metadata.publisher_priority) {
+      const PublishedObjectMetadata last_metadata = last_object.metadata();
+      if (last_metadata.publisher_priority != metadata.publisher_priority) {
         QUICHE_DLOG(INFO) << "Publisher priority changing in a subgroup";
         OnMalformedTrack(full_track_name);
         return;
@@ -158,10 +158,9 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       }
       // If last_object has stream-ending status, it should have been caught by
       // the fin_after_this check above.
-      QUICHE_DCHECK(
-          last_object.metadata().status != MoqtObjectStatus::kEndOfGroup &&
-          last_object.metadata().status != MoqtObjectStatus::kEndOfTrack);
-      if (last_object.metadata().location.object > metadata.location.object) {
+      QUICHE_DCHECK(last_metadata.status != MoqtObjectStatus::kEndOfGroup &&
+                    last_metadata.status != MoqtObjectStatus::kEndOfTrack);
+      if (last_metadata.location.object > metadata.location.object) {
         QUICHE_DLOG(INFO) << "Skipping object because it decreases the "
                           << "object ID in the subgroup.";
         return;
@@ -185,16 +184,18 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
 #if defined(QUICHE_MOQ_TRACE)
     if (inserted) {
       metadata.trace_logical_id = moq_trace::next_logical_id();
-      it->second.metadata().trace_logical_id = metadata.trace_logical_id;
+      it->second.SetTraceLogicalId(*metadata.trace_logical_id);
     }
 #endif
   }
   if (duplicate_object != nullptr) {
-    const bool incomplete = duplicate_object->metadata().payload_length >
-                            duplicate_object->payload_received();
+    const PublishedObjectMetadata cached_metadata =
+        duplicate_object->metadata();
+    const bool incomplete =
+        cached_metadata.payload_length > duplicate_object->payload_received();
     // A partial object's kNormal status is a placeholder until the final
     // fragment reveals the stream FIN. Validate its other immutable fields.
-    if (metadata.IsMalformed(duplicate_object->metadata(),
+    if (metadata.IsMalformed(cached_metadata,
                              /*ignore_status=*/incomplete)) {
       // Something besides the arrival time and extension headers changed.
       OnMalformedTrack(full_track_name);
@@ -205,7 +206,7 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       return;
     }
 #if defined(QUICHE_MOQ_TRACE)
-    metadata.trace_logical_id = duplicate_object->metadata().trace_logical_id;
+    metadata.trace_logical_id = cached_metadata.trace_logical_id;
 #endif
     // This could complete an incomplete object.
     if (incomplete) {
@@ -213,7 +214,7 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
         return;
       }
       if (duplicate_object->payload_received() <
-          duplicate_object->metadata().payload_length) {
+          cached_metadata.payload_length) {
         // Data added to the object, which is still incomplete. Notify
         // listeners, but do not treat the placeholder status of an unfinished
         // object as track state.
@@ -228,6 +229,7 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       }
       // The object is now complete, so its status is meaningful. Update state
       // below with the fragment that finished the object.
+      duplicate_object->Complete(metadata.status, last_object_in_stream);
     } else {
       // No need to update state.
       return;

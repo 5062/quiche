@@ -765,6 +765,10 @@ class QUICHE_EXPORT QuicConnection
   bool OnUnauthenticatedPublicHeader(const QuicPacketHeader& header) override;
   bool OnUnauthenticatedHeader(const QuicPacketHeader& header) override;
   void OnDecryptedPacket(size_t length, EncryptionLevel level) override;
+#if defined(QUICHE_MOQ_TRACE)
+  // Set the encoded length once the framer has separated coalesced packets.
+  void OnMoqTracePacketLength(size_t length) override;
+#endif
   bool OnPacketHeader(const QuicPacketHeader& header) override;
   void OnCoalescedPacket(const QuicEncryptedPacket& packet) override;
   void OnUndecryptablePacket(const QuicEncryptedPacket& packet,
@@ -1639,6 +1643,8 @@ class QUICHE_EXPORT QuicConnection
   }
 
  private:
+  // Process one packet and close any trace left by a framer early return.
+  bool ProcessPacket(const QuicEncryptedPacket& packet);
 #if defined(QUICHE_MOQ_TRACE)
   void FinishMoqTracePacket(quic_trace_packet_outcome outcome);
 #endif
@@ -2515,6 +2521,7 @@ class QUICHE_EXPORT QuicConnection
   std::optional<quic_trace::PacketPhase> moq_trace_rx_application_;
   int moq_trace_application_depth_ = 0;
   size_t moq_trace_rx_packet_length_ = 0;
+  bool moq_trace_rx_control_packet_ = false;
 #endif
 
   // The ECN codepoint of the last packet to be sent to the writer, which

@@ -1770,6 +1770,10 @@ bool QuicFramer::ProcessIetfDataPacket(QuicDataReader* encrypted_reader,
     return false;
   }
 
+#if defined(QUICHE_MOQ_TRACE)
+  visitor_->OnMoqTracePacketLength(encrypted_reader->FullPayload().size());
+#endif
+
   absl::string_view associated_data;
   AssociatedDataStorage ad_storage;
   QuicPacketNumber base_packet_number;

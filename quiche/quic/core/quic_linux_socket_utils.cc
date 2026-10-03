@@ -12,15 +12,38 @@
 #include <cstdint>
 #include <string>
 
+#include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/core/quic_syscall_wrapper.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/platform/api/quic_flag_utils.h"
 #include "quiche/quic/platform/api/quic_ip_address.h"
 #include "quiche/quic/platform/api/quic_logging.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
-#include "quiche/common/platform/api/quiche_logging.h"
 
 namespace quic {
+
+#if defined(QUICHE_MOQ_TRACE)
+namespace {
+
+// A GSO buffer represents several UDP datagrams, including its shorter tail.
+uint64_t MoqTraceDatagrams(msghdr header, size_t bytes) {
+  for (cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != nullptr;
+       cmsg = CMSG_NXTHDR(&header, cmsg)) {
+    if (cmsg->cmsg_level == SOL_UDP && cmsg->cmsg_type == UDP_SEGMENT &&
+        cmsg->cmsg_len >= CMSG_LEN(sizeof(uint16_t))) {
+      uint16_t segment_size;
+      memcpy(&segment_size, CMSG_DATA(cmsg), sizeof(segment_size));
+      if (segment_size != 0) {
+        return bytes / segment_size + (bytes % segment_size != 0);
+      }
+    }
+  }
+  return 1;
+}
+
+}  // namespace
+#endif
 
 QuicMsgHdr::QuicMsgHdr(iovec* iov, size_t iov_len, char* cbuf, size_t cbuf_size)
     : cbuf_(cbuf), cbuf_size_(cbuf_size), cmsg_(nullptr) {
@@ -268,9 +291,26 @@ size_t QuicLinuxSocketUtils::SetIpInfoInCmsg(const QuicIpAddress& self_address,
 WriteResult QuicLinuxSocketUtils::WritePacket(int fd, const QuicMsgHdr& hdr,
                                               bool enobufs_blocked) {
   int rc;
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX);
+#endif
   do {
     rc = GetGlobalSyscallWrapper()->Sendmsg(fd, hdr.hdr(), 0);
   } while (rc < 0 && errno == EINTR);
+#if defined(QUICHE_MOQ_TRACE)
+  const int write_error = rc < 0 ? errno : 0;
+  quic_trace::SocketStats trace_stats;
+  if (rc >= 0) {
+    trace_stats.buffers = 1;
+    trace_stats.datagrams = MoqTraceDatagrams(*hdr.hdr(), rc);
+    trace_stats.bytes = rc;
+  }
+  trace_socket.finish(MoqTraceSocketOutcome(write_error, enobufs_blocked),
+                      trace_stats);
+  if (rc < 0) {
+    errno = write_error;
+  }
+#endif
   if (rc >= 0) {
     return WriteResult(WRITE_STATUS_OK, rc);
   }
@@ -299,10 +339,30 @@ WriteResult QuicLinuxSocketUtils::WriteMultiplePackets(int fd,
   }
 
   int rc;
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX);
+#endif
   do {
     rc = GetGlobalSyscallWrapper()->Sendmmsg(fd, mhdr->mhdr(), mhdr->num_msgs(),
                                              0);
   } while (rc < 0 && errno == EINTR);
+
+#if defined(QUICHE_MOQ_TRACE)
+  const int write_error = rc > 0 ? 0 : (rc == 0 ? EIO : errno);
+  quic_trace::SocketStats trace_stats;
+  if (rc > 0) {
+    trace_stats.buffers = rc;
+    for (int i = 0; i < rc; ++i) {
+      trace_stats.datagrams +=
+          MoqTraceDatagrams(mhdr->mhdr()[i].msg_hdr, mhdr->mhdr()[i].msg_len);
+    }
+    trace_stats.bytes = mhdr->num_bytes_sent(rc);
+  }
+  trace_socket.finish(MoqTraceSocketOutcome(write_error), trace_stats);
+  if (rc <= 0) {
+    errno = write_error;
+  }
+#endif
 
   if (rc > 0) {
     *num_packets_sent = rc;

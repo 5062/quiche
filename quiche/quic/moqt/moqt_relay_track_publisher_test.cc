@@ -414,7 +414,14 @@ TEST_F(MoqtRelayTrackPublisherTest, FragmentedObjectStatusIsKnownAtTheEnd) {
   publisher_.AddObjectListener(&listener_);
   Location location = kLargestLocation.Next();
   EXPECT_CALL(listener_, OnNewObjectAvailable(location, Optional(0),
-                                              /*publisher_priority=*/128));
+                                              /*publisher_priority=*/128))
+      .WillOnce([&](Location, std::optional<uint64_t>, MoqtPriority) {
+        auto object =
+            publisher_.GetCachedObject(location.group, 0, location.object);
+        ASSERT_TRUE(object.has_value());
+        EXPECT_EQ(object->metadata.status, MoqtObjectStatus::kNormal);
+        EXPECT_FALSE(object->fin_after_this);
+      });
   EXPECT_CALL(listener_, OnTrackPublisherGone).Times(0);
   PublishedObjectMetadata first_fragment{
       location, 0, "", MoqtObjectStatus::kNormal, 128, 6};
@@ -426,7 +433,15 @@ TEST_F(MoqtRelayTrackPublisherTest, FragmentedObjectStatusIsKnownAtTheEnd) {
   EXPECT_EQ(publisher_.largest_location(), std::nullopt);
 
   EXPECT_CALL(listener_, OnNewObjectAvailable(location, Optional(0),
-                                              /*publisher_priority=*/128));
+                                              /*publisher_priority=*/128))
+      .WillOnce([&](Location, std::optional<uint64_t>, MoqtPriority) {
+        auto object =
+            publisher_.GetCachedObject(location.group, 0, location.object);
+        ASSERT_TRUE(object.has_value());
+        EXPECT_EQ(object->metadata.status, MoqtObjectStatus::kEndOfGroup);
+        EXPECT_TRUE(object->fin_after_this);
+      });
+  EXPECT_CALL(listener_, OnNewFinAvailable(location, 0));
   PublishedObjectMetadata final_fragment{
       location, 0, "", MoqtObjectStatus::kEndOfGroup, 128, 6};
   publisher_.OnObjectFragment(kTrackName, final_fragment, "ect", /*offset=*/3);
@@ -439,6 +454,8 @@ TEST_F(MoqtRelayTrackPublisherTest, FragmentedObjectStatusIsKnownAtTheEnd) {
   std::optional<PublishedObject> object =
       publisher_.GetCachedObject(location.group, 0, location.object);
   ASSERT_TRUE(object.has_value());
+  EXPECT_EQ(object->metadata.status, MoqtObjectStatus::kEndOfGroup);
+  EXPECT_TRUE(object->fin_after_this);
   std::string payload;
   for (const auto& slice : object->payload) {
     payload += slice.AsStringView();

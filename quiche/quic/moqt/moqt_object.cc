@@ -33,10 +33,17 @@ bool CachedObject::Append(uint64_t offset, absl::string_view payload) {
   return true;
 }
 
+void CachedObject::Complete(MoqtObjectStatus status, bool fin_after_this) {
+  absl::MutexLock lock(mutex_);
+  QUICHE_DCHECK_EQ(payload_received_locked(), metadata_.payload_length);
+  metadata_.status = status;
+  fin_after_this_ |= fin_after_this;
+}
+
 PublishedObject CachedObject::ToPublishedObject(uint64_t offset) const {
   PublishedObject result;
-  result.metadata = metadata();
   absl::MutexLock lock(mutex_);
+  result.metadata = metadata_;
   uint64_t total_length = payload_received_locked();
   quiche::CordToMemSlicesTo(payload_.Subcord(offset, total_length - offset),
                             result.payload);

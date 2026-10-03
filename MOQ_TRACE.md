@@ -41,14 +41,21 @@ code:
 
 | Call site | Emission |
 | --- | --- |
-| `QuicConnection::OnPacket`, `QuicConnection::FinishMoqTracePacket` | RX packet start and end, with the outcome |
+| `QuicConnection::OnPacket`, `QuicConnection::FinishMoqTracePacket` | RX packet start and end, with the outcome; early framer returns close before processing another packet |
 | `QuicConnection` public header, header unprotect, payload decrypt, frame processing | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, `frame_process` |
 | `QuicConnection::OnStreamFrame` | STREAM frame byte range and FIN |
 | `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start and end, phases `frame_encode` and `packet_encrypt` |
-| `QuicPacketReader::ReadAndDispatchPackets`, `QuicConnection::SendPacketToWriter` | UDP socket start and end with buffer, datagram, and byte counts; an `ECONNRESET` read records `connection_reset` |
+| `QuicPacketReader::ReadAndDispatchPackets`, `QuicUdpSocketApi::WritePacket`, `QuicLinuxSocketUtils::WritePacket` and `WriteMultiplePackets` | UDP socket start and end at actual reads and sends, including batch flushes, with buffer, datagram, and byte counts; `ECONNRESET` records `connection_reset` |
 
 No sampling is applied. Analysis selects the packets that carry the objects it
 measures.
+
+RX packet sizes describe individual encoded QUIC packets after the framer splits
+coalesced datagrams. TX socket events describe actual sends, so enqueueing a batch
+or flushing an empty batch emits nothing. GSO reports one buffer and the number
+of datagrams represented by its segments. Partial sendmmsg calls report only the
+accepted buffers and bytes. Socket events carry no connection ID because the
+same socket or batch can serve several connections.
 
 ## Synchronous delivery
 
@@ -136,6 +143,10 @@ flag. The compiler and Bazel executable are found on `PATH`; ICU is found with
 `MOQ_TRACE_CLANG`, `MOQ_TRACE_CLANGXX`, `MOQ_TRACE_BAZELISK`,
 `MOQ_TRACE_ICU_INCLUDE`, and `MOQ_TRACE_ICU_LIBDIR`.
 
+Traced builds link Bazel dependencies statically so each native provider archive
+is linked once into the executable. Linking the archive into several shared
+dependencies registers duplicate tracepoints and emits duplicate events.
+
 Build output, Bazel convenience symlinks, and `moq_trace/artifacts` are ignored by
 git. The artifacts directory holds the traced relay binary under `bin/`, the test
 logs under `logs/`, and one directory per capture with its CTF trace, decoded
@@ -163,6 +174,8 @@ Two fixes belong to this fork and are not tracepoints:
 moq_trace/build.sh
 moq_trace/test.sh
 TRACE=0 moq_trace/test.sh
+moq_trace/test.sh //quiche:quic_connection_test //quiche:quic_framer_test //quiche:quic_udp_socket_test //quiche:quiche_linux_tests
+moq_trace/test_trace.sh
 moq-trace run moq_trace/experiment.toml --output moq_trace/artifacts/capture-1
 ```
 
@@ -171,6 +184,19 @@ mismatches, both providers must decode, and the analyzer must confirm that every
 inbound object has exactly one outbound copy per subscriber. Exact event and
 coverage counts vary with run timing, so the command validates the correlation
 contract instead of comparing stale archived counts.
+
+`test_trace.sh` captures duplicate and coalesced packet fixtures plus GSO and
+sendmmsg fixtures, then checks the actual provider events. It requires LTTng and
+Python's Babeltrace 2 bindings, and leaves the trace and fixture logs under
+`moq_trace/artifacts/test-trace.*`. The checks require balanced packet and phase
+boundaries, dropped duplicate outcomes, and exact buffer, datagram, and byte
+counts for a GSO tail, an external batch flush, and a partial write followed by
+would-block and retry.
+
+`//quiche:quiche_linux_tests` contains the deterministic Linux unit tests. The
+upstream `//quiche:quic_batch_writer_test` socket stress fixture remains a manual
+target: it sends whole bursts before draining the receiver, so its larger cases
+need a host with sufficient UDP receive buffers to avoid kernel drops.
 
 The ordinary configuration keeps the standard suite green: with the macro off,
 the `//quiche:moqt_*_test` targets pass, and the built relay exports neither

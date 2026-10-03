@@ -843,10 +843,32 @@ void QuicConnection::OnError(QuicFramer* framer) {
                   ConnectionCloseBehavior::SEND_CONNECTION_CLOSE_PACKET);
 }
 
+bool QuicConnection::ProcessPacket(const QuicEncryptedPacket& packet) {
+#if defined(QUICHE_MOQ_TRACE)
+  moq_trace_rx_packet_length_ = packet.length();
+#endif
+  const bool processed = framer_.ProcessPacket(packet);
+#if defined(QUICHE_MOQ_TRACE)
+  // OnPacketComplete and OnError normally finish the lifecycle. A successful
+  // framer return can also mean an ignored header or a handled control packet.
+  quic_trace_packet_outcome outcome = QUIC_TRACE_PACKET_OUTCOME_DROPPED;
+  if (!processed) {
+    outcome = framer_.error() == QUIC_DECRYPTION_FAILURE
+                  ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
+                  : QUIC_TRACE_PACKET_OUTCOME_MALFORMED;
+  } else if (moq_trace_rx_control_packet_) {
+    outcome = QUIC_TRACE_PACKET_OUTCOME_SUCCESS;
+  }
+  FinishMoqTracePacket(outcome);
+#endif
+  return processed;
+}
+
 void QuicConnection::OnPacket() {
   last_received_packet_info_.decrypted = false;
 #if defined(QUICHE_MOQ_TRACE)
   FinishMoqTracePacket(QUIC_TRACE_PACKET_OUTCOME_ABANDONED);
+  moq_trace_rx_control_packet_ = false;
   quic_trace::PacketContext context;
   context.connection_id = moq_trace_connection_id_;
   context.direction = QUIC_TRACE_DIRECTION_RX;
@@ -912,6 +934,9 @@ void QuicConnection::OnVersionNegotiationPacket(
   }
 
   server_supported_versions_ = packet.versions;
+#if defined(QUICHE_MOQ_TRACE)
+  moq_trace_rx_control_packet_ = true;
+#endif
   CloseConnection(
       QUIC_INVALID_VERSION,
       absl::StrCat(
@@ -950,6 +975,9 @@ void QuicConnection::OnRetryPacket(QuicConnectionId original_connection_id,
   }
   framer_.set_drop_incoming_retry_packets(true);
   stats_.retry_packet_processed = true;
+#if defined(QUICHE_MOQ_TRACE)
+  moq_trace_rx_control_packet_ = true;
+#endif
   QUIC_DLOG(INFO) << "Received RETRY, replacing connection ID "
                   << default_path_.server_connection_id << " with "
                   << new_connection_id << ", received token "
@@ -1307,6 +1335,15 @@ void QuicConnection::OnDecryptedPacket(size_t /*length*/,
   }
   visitor_->OnPacketDecrypted(level);
 }
+
+#if defined(QUICHE_MOQ_TRACE)
+void QuicConnection::OnMoqTracePacketLength(size_t length) {
+  moq_trace_rx_packet_length_ = length;
+  if (moq_trace_rx_packet_.has_value()) {
+    moq_trace_rx_packet_->set_byte_len(length);
+  }
+}
+#endif
 
 QuicSocketAddress QuicConnection::GetEffectivePeerAddressFromCurrentPacket()
     const {
@@ -2560,6 +2597,9 @@ bool QuicConnection::IsValidStatelessResetToken(
 }
 
 void QuicConnection::OnAuthenticatedIetfStatelessResetPacket() {
+#if defined(QUICHE_MOQ_TRACE)
+  moq_trace_rx_control_packet_ = true;
+#endif
   // TODO(fayang): Add OnAuthenticatedIetfStatelessResetPacket to
   // debug_visitor_.
   QUICHE_DCHECK_EQ(perspective_, Perspective::IS_CLIENT);
@@ -3065,16 +3105,7 @@ void QuicConnection::ProcessUdpPacket(const QuicSocketAddress& self_address,
                 << last_received_packet_info_.destination_address;
 
   ScopedPacketFlusher flusher(this);
-#if defined(QUICHE_MOQ_TRACE)
-  moq_trace_rx_packet_length_ = packet.length();
-#endif
-  if (!framer_.ProcessPacket(packet)) {
-#if defined(QUICHE_MOQ_TRACE)
-    FinishMoqTracePacket(
-        framer_.error() == QUIC_DECRYPTION_FAILURE
-            ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
-            : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
-#endif
+  if (!ProcessPacket(packet)) {
     // If we are unable to decrypt this packet, it might be
     // because the CHLO or SHLO packet was lost.
     QUIC_DVLOG(1) << ENDPOINT
@@ -4542,36 +4573,9 @@ WriteResult QuicConnection::SendPacketToWriter(
   last_ecn_codepoint_sent_ = ecn_codepoint;
   last_flow_label_sent_ = flow_label;
   params.flow_label = flow_label;
-#if defined(QUICHE_MOQ_TRACE)
-  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX,
-                                  moq_trace_connection_id_);
-#endif
   WriteResult result =
       writer->WritePacket(buffer, buf_len, self_address, destination_address,
                           per_packet_options_, params);
-#if defined(QUICHE_MOQ_TRACE)
-  quic_trace_socket_outcome trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_ERROR;
-  switch (result.status) {
-    case WRITE_STATUS_OK:
-      trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_SUCCESS;
-      break;
-    case WRITE_STATUS_BLOCKED:
-      trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_WOULD_BLOCK;
-      break;
-    case WRITE_STATUS_BLOCKED_DATA_BUFFERED:
-      trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_PENDING;
-      break;
-    default:
-      break;
-  }
-  quic_trace::SocketStats trace_stats;
-  trace_stats.buffers = 1;
-  trace_stats.datagrams = result.status == WRITE_STATUS_OK ? 1 : 0;
-  trace_stats.bytes = result.status == WRITE_STATUS_OK
-                          ? static_cast<uint64_t>(result.bytes_written)
-                          : 0;
-  trace_socket.finish(trace_outcome, trace_stats);
-#endif
   return result;
 }
 
@@ -4887,18 +4891,7 @@ void QuicConnection::MaybeProcessUndecryptablePackets() {
     }
     last_received_packet_info_ = undecryptable_packet->packet_info;
     current_packet_data_ = undecryptable_packet->packet->data();
-#if defined(QUICHE_MOQ_TRACE)
-    moq_trace_rx_packet_length_ = undecryptable_packet->packet->length();
-#endif
-    const bool processed = framer_.ProcessPacket(*undecryptable_packet->packet);
-#if defined(QUICHE_MOQ_TRACE)
-    if (!processed) {
-      FinishMoqTracePacket(
-          framer_.error() == QUIC_DECRYPTION_FAILURE
-              ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
-              : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
-    }
-#endif
+    const bool processed = ProcessPacket(*undecryptable_packet->packet);
     current_packet_data_ = nullptr;
 
     if (processed) {
@@ -4959,19 +4952,10 @@ bool QuicConnection::MaybeProcessCoalescedPackets() {
     received_coalesced_packets_.pop_front();
 
     QUIC_DVLOG(1) << ENDPOINT << "Processing coalesced packet";
-#if defined(QUICHE_MOQ_TRACE)
-    moq_trace_rx_packet_length_ = packet->length();
-#endif
-    if (framer_.ProcessPacket(*packet)) {
+    if (ProcessPacket(*packet)) {
       processed = true;
       ++stats_.num_coalesced_packets_processed;
     } else {
-#if defined(QUICHE_MOQ_TRACE)
-      FinishMoqTracePacket(
-          framer_.error() == QUIC_DECRYPTION_FAILURE
-              ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
-              : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
-#endif
       // If we are unable to decrypt this packet, it might be
       // because the CHLO or SHLO packet was lost.
     }

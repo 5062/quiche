@@ -75,7 +75,9 @@ else
     echo "moq_trace must be available through pkg-config" >&2
     exit 1
   fi
-  trace=(--cxxopt=-DQUICHE_MOQ_TRACE)
+  # Provider archives must reach the final binary once. Linking them into each
+  # Bazel shared dependency registers the same tracepoints several times.
+  trace=(--cxxopt=-DQUICHE_MOQ_TRACE --dynamic_mode=off)
   read -r -a trace_cflags <<< "$(pkg-config --cflags moq_trace)"
   for flag in "${trace_cflags[@]}"; do
     if [[ $flag == -I* ]]; then
