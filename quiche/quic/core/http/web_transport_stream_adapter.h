@@ -49,12 +49,14 @@ class QUICHE_EXPORT WebTransportStreamAdapter : public webtransport::Stream {
     visitor_ = std::move(visitor);
   }
   QuicStreamId GetStreamId() const override { return stream_->id(); }
+#if defined(QUICHE_MOQ_TRACE)
   uint64_t ReadOffset() const override { return sequencer_->NumBytesConsumed(); }
   // Includes bytes still held in the send buffer, so the offset marks where the
   // next write lands rather than how far transmission has progressed.
   uint64_t WriteOffset() const override {
     return stream_->stream_bytes_written() + stream_->BufferedDataBytes();
   }
+#endif
 
   void ResetWithUserCode(WebTransportStreamError error) override;
   void ResetDueToInternalError() override {

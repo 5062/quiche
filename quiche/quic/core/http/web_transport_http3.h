@@ -130,7 +130,9 @@ class QUICHE_EXPORT WebTransportHttp3
   std::optional<std::string> GetNegotiatedSubprotocol() const override {
     return subprotocol_selected_;
   }
+#if defined(QUICHE_MOQ_TRACE)
   std::optional<uint64_t> TraceConnectionId() const override;
+#endif
   void MaybeSetSubprotocolFromResponseHeaders(
       const quiche::HttpHeaderBlock& headers);
 

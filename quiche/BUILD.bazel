@@ -21,8 +21,6 @@ load(
     "io_tool_support_srcs",
     "linux_only_hdrs",
     "linux_only_srcs",
-    "linux_only_tests_hdrs",
-    "linux_only_tests_srcs",
     "masque_private_tokens_hdrs",
     "masque_private_tokens_srcs",
     "masque_support_hdrs",
@@ -43,7 +41,6 @@ load(
     "quiche_tool_support_srcs",
 )
 load("//build:test.bzl", "test_suite_from_source_list")
-load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 licenses(["notice"])
 
@@ -60,7 +57,7 @@ cc_library(
     name = "quiche_linux_test_support",
     testonly = True,
     srcs = linux_only_srcs,
-    hdrs = linux_only_hdrs + linux_only_tests_hdrs,
+    hdrs = linux_only_hdrs,
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
         ":io_tool_support",
@@ -71,36 +68,23 @@ cc_library(
     ],
 )
 
-_LINUX_TEST_DEPS = [
-    ":io_test_support",
-    ":io_tool_support",
-    ":quiche_core",
-    ":quiche_linux_test_support",
-    ":quiche_test_support",
-    "@com_google_absl//absl/base:core_headers",
-    "@com_google_googletest//:gtest",
-    "@com_google_googletest//:gtest_main",
-]
-
 test_suite_from_source_list(
     name = "quiche_linux_tests",
     srcs = [
-        src
-        for src in linux_only_tests_srcs
-        if src != "quic/core/batch_writer/quic_batch_writer_test.cc"
+        "quic/core/batch_writer/quic_gso_batch_writer_test.cc",
+        "quic/core/batch_writer/quic_sendmmsg_batch_writer_test.cc",
     ],
     target_compatible_with = ["@platforms//os:linux"],
-    deps = _LINUX_TEST_DEPS,
-)
-
-# This fixture sends a whole burst before draining the receiver. Large bursts
-# require a host with sufficient UDP receive buffers to avoid kernel drops.
-cc_test(
-    name = "quic_batch_writer_test",
-    srcs = ["quic/core/batch_writer/quic_batch_writer_test.cc"],
-    tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
-    deps = _LINUX_TEST_DEPS,
+    deps = [
+        ":io_test_support",
+        ":io_tool_support",
+        ":quiche_core",
+        ":quiche_linux_test_support",
+        ":quiche_test_support",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_googletest//:gtest",
+        "@com_google_googletest//:gtest_main",
+    ],
 )
 
 cc_library(

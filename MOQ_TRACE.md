@@ -43,7 +43,7 @@ code:
 | --- | --- |
 | `QuicConnection::OnPacket`, `QuicConnection::FinishMoqTracePacket` | RX packet start and end, with the outcome; early framer returns close before processing another packet |
 | `QuicConnection` public header, header unprotect, payload decrypt, frame processing | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, `frame_process` |
-| `QuicConnection::OnStreamFrame` | STREAM frame byte range and FIN |
+| `QuicConnection::OnStreamFrame` | STREAM frame byte range and outcome |
 | `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start and end, phases `frame_encode` and `packet_encrypt` |
 | `QuicPacketReader::ReadAndDispatchPackets`, `QuicUdpSocketApi::WritePacket`, `QuicLinuxSocketUtils::WritePacket` and `WriteMultiplePackets` | UDP socket start and end at actual reads and sends, including batch flushes, with buffer, datagram, and byte counts; `ECONNRESET` records `connection_reset` |
 
@@ -193,10 +193,8 @@ boundaries, dropped duplicate outcomes, and exact buffer, datagram, and byte
 counts for a GSO tail, an external batch flush, and a partial write followed by
 would-block and retry.
 
-`//quiche:quiche_linux_tests` contains the deterministic Linux unit tests. The
-upstream `//quiche:quic_batch_writer_test` socket stress fixture remains a manual
-target: it sends whole bursts before draining the receiver, so its larger cases
-need a host with sufficient UDP receive buffers to avoid kernel drops.
+`//quiche:quiche_linux_tests` contains only the GSO and sendmmsg fixtures used by
+the capture checker.
 
 The ordinary configuration keeps the standard suite green: with the macro off,
 the `//quiche:moqt_*_test` targets pass, and the built relay exports neither
