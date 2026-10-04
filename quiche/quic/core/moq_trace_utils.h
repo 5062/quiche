@@ -3,12 +3,16 @@
 
 #if defined(QUICHE_MOQ_TRACE)
 
+#include <array>
 #include <cerrno>
+#include <cstring>
 #include <optional>
+#include <string>
 #include <quic_trace/trace.hpp>
 
 #include "quiche/quic/core/quic_packets.h"
 #include "quiche/quic/core/quic_types.h"
+#include "quiche/quic/platform/api/quic_socket_address.h"
 
 namespace quic {
 
@@ -26,6 +30,24 @@ inline quic_trace_socket_outcome MoqTraceSocketOutcome(
     return QUIC_TRACE_SOCKET_OUTCOME_CONNECTION_RESET;
   }
   return QUIC_TRACE_SOCKET_OUTCOME_ERROR;
+}
+
+// Describe one end of a connection path for `quic_connection_path`. An
+// uninitialized address, such as a wildcard the stack never resolved, is
+// recorded as the unspecified IPv6 address with its port.
+inline quic_trace::PathEndpoint MoqTracePathEndpoint(
+    const QuicIpAddress& host, uint16_t port) {
+  const std::string packed = host.Normalized().ToPackedString();
+  if (packed.size() == 4) {
+    std::array<uint8_t, 4> address;
+    std::memcpy(address.data(), packed.data(), address.size());
+    return quic_trace::PathEndpoint::ipv4(address, port);
+  }
+  std::array<uint8_t, 16> address{};
+  if (packed.size() == address.size()) {
+    std::memcpy(address.data(), packed.data(), address.size());
+  }
+  return quic_trace::PathEndpoint::ipv6(address, port);
 }
 
 // Map the encryption level to the shared provider's packet-space enum.

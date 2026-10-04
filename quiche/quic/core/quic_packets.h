@@ -27,6 +27,13 @@
 #include "quiche/common/platform/api/quiche_export.h"
 #include "quiche/common/quiche_endian.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <utility>
+#include <vector>
+
+#include <quic_trace/trace.hpp>
+#endif
+
 namespace quic {
 
 class QuicPacket;
@@ -344,6 +351,15 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
   // Returns the IPv6 flow label in host byte order if present, or 0 otherwise.
   uint32_t ipv6_flow_label() const { return ipv6_flow_label_; }
 
+#if defined(QUICHE_MOQ_TRACE)
+  // When the receive system call that returned this packet's datagram
+  // completed, on the moq-trace clock, or 0 when the packet did not come from
+  // a traced read. A packet without it gets no packet trace, because its
+  // lifecycle must start at that read.
+  uint64_t moq_trace_read_ns() const { return moq_trace_read_ns_; }
+  void set_moq_trace_read_ns(uint64_t read_ns) { moq_trace_read_ns_ = read_ns; }
+#endif
+
   // By default, gtest prints the raw bytes of an object. The bool data
   // member (in the base class QuicData) causes this object to have padding
   // bytes, which causes the default gtest object printer to read
@@ -368,7 +384,68 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
   QuicEcnCodepoint ecn_codepoint_;
   // IPv6 flow label.
   uint32_t ipv6_flow_label_;
+#if defined(QUICHE_MOQ_TRACE)
+  uint64_t moq_trace_read_ns_ = 0;
+#endif
 };
+
+#if defined(QUICHE_MOQ_TRACE)
+// The traced packets one write carries.
+//
+// A packet's moq-trace lifecycle ends when the send system call that accepts
+// its datagram returns. Packets therefore wait here in their send_queue phase
+// while their bytes move through coalescing, the write-blocked queue, and the
+// writer, and the holder travels with the bytes. Destroying the holder records
+// every packet still in it as abandoned: a packet that was never sent, or one
+// handed to a writer that sends it later without telling when.
+class QUICHE_EXPORT MoqTraceSend {
+ public:
+  MoqTraceSend() = default;
+  MoqTraceSend(MoqTraceSend&&) = default;
+  MoqTraceSend& operator=(MoqTraceSend&&) = default;
+  MoqTraceSend(const MoqTraceSend&) = delete;
+  MoqTraceSend& operator=(const MoqTraceSend&) = delete;
+
+  // Holds a packet whose encryption just ended and starts its send_queue phase.
+  void Add(quic_trace::Packet packet) {
+    quic_trace::PacketPhase queue =
+        packet.phase(QUIC_TRACE_PACKET_PHASE_SEND_QUEUE);
+    packets_.emplace_back(std::move(packet), std::move(queue));
+  }
+
+  // Takes every packet of |other|, as when packets coalesce into one datagram.
+  void Append(MoqTraceSend&& other) {
+    for (auto& entry : other.packets_) {
+      packets_.push_back(std::move(entry));
+    }
+    other.packets_.clear();
+  }
+
+  // Ends every packet at |sent_ns|, when the send that accepted them returned.
+  void Sent(uint64_t sent_ns) {
+    Finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS, sent_ns);
+  }
+
+  // Ends every packet as dropped at |at_ns|, when the send that failed
+  // returned: the kernel never put them on the wire.
+  void Dropped(uint64_t at_ns) {
+    Finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED, at_ns);
+  }
+
+  bool empty() const { return packets_.empty(); }
+
+ private:
+  void Finish(quic_trace_packet_outcome outcome, uint64_t at_ns) {
+    for (auto& [packet, queue] : packets_) {
+      queue.finish_at(outcome, at_ns);
+      packet.finish_at(outcome, at_ns);
+    }
+    packets_.clear();
+  }
+
+  std::vector<std::pair<quic_trace::Packet, quic_trace::PacketPhase>> packets_;
+};
+#endif
 
 // SerializedPacket contains information of a serialized(encrypted) packet.
 //
@@ -428,6 +505,11 @@ struct QUICHE_EXPORT SerializedPacket {
   // Only populated if encryption_level is ENCRYPTION_INITIAL.
   // TODO(b/265777524): remove this.
   std::optional<QuicPacketHeader> initial_header;
+#if defined(QUICHE_MOQ_TRACE)
+  // The traced packet these bytes hold, waiting for its send. Moves with the
+  // packet; a copy made by CopySerializedPacket does not carry it.
+  MoqTraceSend moq_trace_send;
+#endif
 };
 
 // Make a copy of |serialized| (including the underlying frames). |copy_buffer|

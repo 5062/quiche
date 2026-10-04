@@ -869,11 +869,23 @@ void QuicConnection::OnPacket() {
 #if defined(QUICHE_MOQ_TRACE)
   FinishMoqTracePacket(QUIC_TRACE_PACKET_OUTCOME_ABANDONED);
   moq_trace_rx_control_packet_ = false;
+  // A packet's lifecycle starts when the read that returned its datagram
+  // completed. A packet that came from no traced read, such as one a test
+  // builds, cannot start there, so it gets no trace rather than a later start.
+  const uint64_t read_ns = last_received_packet_info_.moq_trace_read_ns;
+  if (read_ns == 0) {
+    return;
+  }
   quic_trace::PacketContext context;
   context.connection_id = moq_trace_connection_id_;
   context.direction = QUIC_TRACE_DIRECTION_RX;
+  context.start_ns = read_ns;
   moq_trace_rx_packet_.emplace(context);
   moq_trace_rx_packet_->set_byte_len(moq_trace_rx_packet_length_);
+  // The wait behind earlier packets of the same read, and for a replayed
+  // packet the wait for its keys, ends as this packet's processing begins.
+  moq_trace_rx_packet_->phase_at(QUIC_TRACE_PACKET_PHASE_READ_QUEUE, read_ns)
+      .finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
   moq_trace_rx_header_parse_.emplace(
       moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_HEADER_PARSE));
 #endif
@@ -1623,6 +1635,7 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
     moq_trace_rx_frame_process_.emplace(
         moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
   }
+  moq_trace_stream_frame_accepted_ns_.reset();
 #endif
   visitor_->OnStreamFrame(frame);
 #if defined(QUICHE_MOQ_TRACE)
@@ -1635,10 +1648,21 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
     moq_trace_rx_frame_process_.reset();
   }
   if (moq_trace_rx_packet_.has_value() && frame.data_length != 0) {
-    moq_trace_rx_packet_->stream_frame(
-        frame.stream_id, frame.offset, frame.offset + frame.data_length,
-        trace_outcome);
+    // The frame's timestamp is when the stream's receive buffer accepted its
+    // bytes, which the sequencer reported before any application callback. A
+    // frame the session or stream discarded was never accepted.
+    if (moq_trace_stream_frame_accepted_ns_.has_value()) {
+      moq_trace_rx_packet_->stream_frame_at(
+          frame.stream_id, frame.offset, frame.offset + frame.data_length,
+          QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
+          *moq_trace_stream_frame_accepted_ns_);
+    } else {
+      moq_trace_rx_packet_->stream_frame(
+          frame.stream_id, frame.offset, frame.offset + frame.data_length,
+          QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+    }
   }
+  moq_trace_stream_frame_accepted_ns_.reset();
 #endif
   stats_.stream_bytes_received += frame.data_length;
   ping_manager_.reset_consecutive_retransmittable_on_wire_count();
@@ -2542,6 +2566,18 @@ QuicConnection::MoqTraceApplicationScope::~MoqTraceApplicationScope() {
   }
 }
 
+void QuicConnection::FinishMoqTraceWrite(MoqTraceSend& send,
+                                         const WriteResult& result) {
+  if (result.moq_trace_sent_ns == 0) {
+    return;
+  }
+  if (result.status == WRITE_STATUS_OK) {
+    send.Sent(result.moq_trace_sent_ns);
+  } else if (IsWriteError(result.status)) {
+    send.Dropped(result.moq_trace_sent_ns);
+  }
+}
+
 void QuicConnection::FinishMoqTracePacket(quic_trace_packet_outcome outcome) {
   if (moq_trace_rx_application_.has_value()) {
     moq_trace_rx_application_->finish(outcome);
@@ -3048,6 +3084,13 @@ void QuicConnection::ProcessUdpPacket(const QuicSocketAddress& self_address,
   last_received_packet_info_ = ReceivedPacketInfo(
       self_address, peer_address, packet.receipt_time(), packet.length(),
       packet.ecn_codepoint(), packet.ipv6_flow_label());
+#if defined(QUICHE_MOQ_TRACE)
+  last_received_packet_info_.moq_trace_read_ns = packet.moq_trace_read_ns();
+  if (last_received_packet_info_.moq_trace_read_ns == 0 &&
+      moq_trace_stamp_unread_packets_) {
+    last_received_packet_info_.moq_trace_read_ns = quic_trace::now_ns();
+  }
+#endif
   current_packet_data_ = packet.data();
 
   if (!default_path_.self_address.IsInitialized()) {
@@ -3480,7 +3523,7 @@ void QuicConnection::WriteQueuedPackets() {
     if (HandleWriteBlocked()) {
       break;
     }
-    const BufferedPacket& packet = buffered_packets_.front();
+    BufferedPacket& packet = buffered_packets_.front();
     WriteResult result = SendPacketToWriter(
         packet.data.get(), packet.length, packet.self_address.host(),
         packet.peer_address, writer_, packet.ecn_codepoint, packet.flow_label);
@@ -3491,6 +3534,9 @@ void QuicConnection::WriteQueuedPackets() {
       // TODO(wub): Reduce max packet size to a safe default, or the actual MTU.
       mtu_discoverer_.Disable();
       mtu_discovery_alarm().Cancel();
+#if defined(QUICHE_MOQ_TRACE)
+      FinishMoqTraceWrite(packet.moq_trace_send, result);
+#endif
       buffered_packets_.pop_front();
       continue;
     }
@@ -3499,10 +3545,17 @@ void QuicConnection::WriteQueuedPackets() {
           visitor_->MaybeMitigateWriteError(result)) {
         result.status = WRITE_STATUS_BLOCKED;
       } else {
+#if defined(QUICHE_MOQ_TRACE)
+        FinishMoqTraceWrite(packet.moq_trace_send, result);
+#endif
         OnWriteError(result.error_code);
         break;
       }
     }
+#if defined(QUICHE_MOQ_TRACE)
+    // A mitigated error is retried as a blocked write, so it ends nothing.
+    FinishMoqTraceWrite(packet.moq_trace_send, result);
+#endif
     if (result.status == WRITE_STATUS_OK ||
         result.status == WRITE_STATUS_BLOCKED_DATA_BUFFERED) {
       buffered_packets_.pop_front();
@@ -3854,6 +3907,10 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
           break;
         }
       }
+#if defined(QUICHE_MOQ_TRACE)
+      // The packet now leaves inside the coalesced datagram.
+      moq_trace_coalesced_.Append(std::move(packet->moq_trace_send));
+#endif
       if (coalesced_packet_.length() < coalesced_packet_.max_packet_length()) {
         QUIC_DVLOG(1) << ENDPOINT << "Trying to set soft max packet length to "
                       << coalesced_packet_.max_packet_length() -
@@ -3870,6 +3927,10 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
       buffered_packets_.emplace_back(*packet, send_from_address,
                                      send_to_address, last_ecn_codepoint_sent_,
                                      last_flow_label_sent_);
+#if defined(QUICHE_MOQ_TRACE)
+      buffered_packets_.back().moq_trace_send =
+          std::move(packet->moq_trace_send);
+#endif
       break;
     case SEND_TO_WRITER:
       // Stop using coalescer from now on.
@@ -3927,8 +3988,18 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
       buffered_packets_.emplace_back(*packet, send_from_address,
                                      send_to_address, last_ecn_codepoint_sent_,
                                      last_flow_label_sent_);
+#if defined(QUICHE_MOQ_TRACE)
+      // The send would block, so the packet waits with its bytes.
+      buffered_packets_.back().moq_trace_send =
+          std::move(packet->moq_trace_send);
+#endif
     }
   }
+#if defined(QUICHE_MOQ_TRACE)
+  if (fate == SEND_TO_WRITER) {
+    FinishMoqTraceWrite(packet->moq_trace_send, result);
+  }
+#endif
 
   // In some cases, an MTU probe can cause EMSGSIZE. This indicates that the
   // MTU discovery is permanently unsuccessful.
@@ -4573,6 +4644,21 @@ WriteResult QuicConnection::SendPacketToWriter(
   last_ecn_codepoint_sent_ = ecn_codepoint;
   last_flow_label_sent_ = flow_label;
   params.flow_label = flow_label;
+#if defined(QUICHE_MOQ_TRACE)
+  // Every send passes here, so the path a connection sends on is recorded
+  // before its first send and again whenever the addresses change, which is
+  // what analysis needs to join the connection's packets to a capture.
+  const QuicSocketAddress self(self_address, default_path_.self_address.port());
+  if (!moq_trace_path_.has_value() || moq_trace_path_->first != self ||
+      moq_trace_path_->second != destination_address) {
+    moq_trace_path_.emplace(self, destination_address);
+    quic_trace::connection_path(
+        moq_trace_connection_id_,
+        MoqTracePathEndpoint(self_address, self.port()),
+        MoqTracePathEndpoint(destination_address.host(),
+                             destination_address.port()));
+  }
+#endif
   WriteResult result =
       writer->WritePacket(buffer, buf_len, self_address, destination_address,
                           per_packet_options_, params);
@@ -5026,6 +5112,9 @@ void QuicConnection::SendConnectionClosePacket(
         this, GetConnectionCloseEncryptionLevel());
     if (version().IsIetfQuic()) {
       coalesced_packet_.Clear();
+#if defined(QUICHE_MOQ_TRACE)
+      moq_trace_coalesced_ = MoqTraceSend();
+#endif
     }
     ClearQueuedPackets();
     // If there was a packet write error, write the smallest close possible.
@@ -5054,6 +5143,9 @@ void QuicConnection::SendConnectionClosePacket(
   // so the only packets to be sent will be connection close packets.
   if (version().IsIetfQuic()) {
     coalesced_packet_.Clear();
+#if defined(QUICHE_MOQ_TRACE)
+    moq_trace_coalesced_ = MoqTraceSend();
+#endif
   }
   ClearQueuedPackets();
 
@@ -5574,6 +5666,9 @@ bool QuicConnection::WritePacketUsingWriter(
       packet->encrypted_buffer, packet->encrypted_length, self_address.host(),
       peer_address, writer, GetEcnCodepointToSend(peer_address),
       outgoing_flow_label());
+#if defined(QUICHE_MOQ_TRACE)
+  FinishMoqTraceWrite(packet->moq_trace_send, result);
+#endif
 
   const uint32_t writer_batch_id = result.batch_id;
 
@@ -6385,6 +6480,11 @@ void QuicConnection::MaybeCoalescePacketOfHigherSpace() {
 
 bool QuicConnection::FlushCoalescedPacket() {
   ScopedCoalescedPacketClearer clearer(&coalesced_packet_);
+#if defined(QUICHE_MOQ_TRACE)
+  // The coalescer empties now, so its traced packets leave with this flush
+  // or, when it sends nothing, end abandoned.
+  MoqTraceSend coalesced = std::move(moq_trace_coalesced_);
+#endif
   if (!connected_) {
     return false;
   }
@@ -6434,6 +6534,9 @@ bool QuicConnection::FlushCoalescedPacket() {
         buffer, static_cast<QuicPacketLength>(length),
         coalesced_packet_.self_address(), coalesced_packet_.peer_address(),
         coalesced_packet_.ecn_codepoint(), coalesced_packet_.flow_label());
+#if defined(QUICHE_MOQ_TRACE)
+    buffered_packets_.back().moq_trace_send = std::move(coalesced);
+#endif
   } else {
     WriteResult result = SendPacketToWriter(
         buffer, length, coalesced_packet_.self_address().host(),
@@ -6444,10 +6547,17 @@ bool QuicConnection::FlushCoalescedPacket() {
           visitor_->MaybeMitigateWriteError(result)) {
         result.status = WRITE_STATUS_BLOCKED;
       } else {
+#if defined(QUICHE_MOQ_TRACE)
+        FinishMoqTraceWrite(coalesced, result);
+#endif
         OnWriteError(result.error_code);
         return false;
       }
     }
+#if defined(QUICHE_MOQ_TRACE)
+    // A mitigated error is retried as a blocked write, so it ends nothing.
+    FinishMoqTraceWrite(coalesced, result);
+#endif
     if (IsWriteBlockedStatus(result.status)) {
       QUICHE_DCHECK(writer_->IsWriteBlocked());
       visitor_->OnWriteBlocked();
@@ -6458,6 +6568,9 @@ bool QuicConnection::FlushCoalescedPacket() {
             buffer, static_cast<QuicPacketLength>(length),
             coalesced_packet_.self_address(), coalesced_packet_.peer_address(),
             coalesced_packet_.ecn_codepoint(), coalesced_packet_.flow_label());
+#if defined(QUICHE_MOQ_TRACE)
+        buffered_packets_.back().moq_trace_send = std::move(coalesced);
+#endif
       }
     }
   }

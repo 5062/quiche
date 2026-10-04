@@ -551,6 +551,14 @@ QuicSocketAddress QuicConnectionPeer::GetReceivedServerPreferredAddress(
 // static
 bool QuicConnectionPeer::TestLastReceivedPacketInfoDefaults() {
   QuicConnection::ReceivedPacketInfo info{QuicTime::Zero()};
+#if defined(QUICHE_MOQ_TRACE)
+  // The traced build adds the read time of the packet's datagram.
+  constexpr size_t kExpectedSize = 280;
+  const bool moq_trace_defaults = info.moq_trace_read_ns == 0;
+#else
+  constexpr size_t kExpectedSize = 272;
+  const bool moq_trace_defaults = true;
+#endif
   QUIC_DVLOG(2)
       << "QuicConnectionPeer::TestLastReceivedPacketInfoDefaults"
       << " dest_addr passed: "
@@ -567,7 +575,7 @@ bool QuicConnectionPeer::TestLastReceivedPacketInfoDefaults() {
       << " ecn_codepoint passed: " << (info.ecn_codepoint == ECN_NOT_ECT)
       << " sizeof(ReceivedPacketInfo) passed: "
       << (sizeof(size_t) != 8 ||
-          sizeof(QuicConnection::ReceivedPacketInfo) == 272);
+          sizeof(QuicConnection::ReceivedPacketInfo) == kExpectedSize);
   return info.destination_address == QuicSocketAddress() &&
          info.source_address == QuicSocketAddress() &&
          info.receipt_time == QuicTime::Zero() &&
@@ -577,11 +585,12 @@ bool QuicConnectionPeer::TestLastReceivedPacketInfoDefaults() {
          // There's no simple way to compare all the values of QuicPacketHeader.
          info.frames.empty() && info.ecn_codepoint == ECN_NOT_ECT &&
          info.actual_destination_address == QuicSocketAddress() &&
+         moq_trace_defaults &&
          // If the condition below fails, the contents of ReceivedPacketInfo
          // have changed. Please add the relevant conditions and update the
          // length below.
          (sizeof(size_t) != 8 ||
-          sizeof(QuicConnection::ReceivedPacketInfo) == 272);
+          sizeof(QuicConnection::ReceivedPacketInfo) == kExpectedSize);
 }
 
 // static

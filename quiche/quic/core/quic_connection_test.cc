@@ -644,6 +644,10 @@ class QuicConnectionTest : public QuicTestWithParam<TestParams> {
         notifier_(&connection_),
         connection_close_frame_count_(0) {
     QUIC_DVLOG(2) << "QuicConnectionTest(" << PrintToString(GetParam()) << ")";
+#if defined(QUICHE_MOQ_TRACE)
+    // The fixture injects packets directly, so each starts at its injection.
+    QuicConnectionPeer::SetMoqTraceStampUnreadPackets(&connection_, true);
+#endif
     connection_.set_defer_send_in_response_to_packets(GetParam().ack_response ==
                                                       AckResponse::kDefer);
     framer_.SetInitialObfuscators(TestConnectionId());

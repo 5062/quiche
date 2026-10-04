@@ -322,7 +322,24 @@ void QuicUdpSocketApi::ReadPacket(
   int flags = 0;
 #endif
 
+#if defined(QUICHE_MOQ_TRACE)
+  // One receive system call is one socket operation, and the instant it
+  // returns starts the lifecycle of every packet it delivered.
+  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
+#endif
   int bytes_read = recvmsg(fd, &hdr, flags);
+#if defined(QUICHE_MOQ_TRACE)
+  const uint64_t read_ns = quic_trace::now_ns();
+  if (bytes_read < 0) {
+    const int read_error = errno;
+    trace_socket.finish_at(MoqTraceSocketOutcome(read_error), {}, read_ns);
+    errno = read_error;
+  } else {
+    result->moq_trace_read_ns = read_ns;
+    trace_socket.finish_at(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS,
+                           {1, 1, static_cast<uint64_t>(bytes_read)}, read_ns);
+  }
+#endif
   if (bytes_read < 0) {
     const int error_num = errno;
     if (error_num != EAGAIN) {
@@ -419,7 +436,29 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
     }
     // If MSG_TRUNC is set on Linux, recvmmsg will return the real packet size
     // in |hdrs[i].msg_len| even if packet buffer is too small to receive it.
+#if defined(QUICHE_MOQ_TRACE)
+    quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
+#endif
     int packets_read = recvmmsg(fd, hdrs, results->size(), MSG_TRUNC, nullptr);
+#if defined(QUICHE_MOQ_TRACE)
+    // Every result this call filled shares the instant it returned.
+    const uint64_t read_ns = quic_trace::now_ns();
+    if (packets_read < 0) {
+      const int read_error = errno;
+      trace_socket.finish_at(MoqTraceSocketOutcome(read_error), {}, read_ns);
+      errno = read_error;
+    } else {
+      quic_trace::SocketStats trace_stats;
+      trace_stats.buffers = packets_read;
+      trace_stats.datagrams = packets_read;
+      for (int i = 0; i < packets_read; ++i) {
+        trace_stats.bytes += hdrs[i].msg_len;
+        (*results)[i].moq_trace_read_ns = read_ns;
+      }
+      trace_socket.finish_at(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS, trace_stats,
+                             read_ns);
+    }
+#endif
     if (packets_read <= 0) {
       const int error_num = errno;
       if (error_num != EAGAIN) {
@@ -595,6 +634,9 @@ WriteResult QuicUdpSocketApi::WritePacket(
     rc = sendmsg(fd, &hdr, 0);
   } while (rc < 0 && errno == EINTR);
 #if defined(QUICHE_MOQ_TRACE)
+  // The instant the send returns ends this socket operation and, through the
+  // result, every packet the datagram carried.
+  const uint64_t sent_ns = quic_trace::now_ns();
   const int write_error = rc < 0 ? errno : 0;
   quic_trace::SocketStats trace_stats;
   if (rc >= 0) {
@@ -602,18 +644,22 @@ WriteResult QuicUdpSocketApi::WritePacket(
     trace_stats.datagrams = 1;
     trace_stats.bytes = rc;
   }
-  trace_socket.finish(MoqTraceSocketOutcome(write_error), trace_stats);
+  trace_socket.finish_at(MoqTraceSocketOutcome(write_error), trace_stats,
+                         sent_ns);
   if (rc < 0) {
     errno = write_error;
   }
 #endif
-  if (rc >= 0) {
-    return WriteResult(WRITE_STATUS_OK, rc);
-  }
-  return WriteResult((errno == EAGAIN || errno == EWOULDBLOCK)
-                         ? WRITE_STATUS_BLOCKED
-                         : WRITE_STATUS_ERROR,
-                     errno);
+  WriteResult result =
+      rc >= 0 ? WriteResult(WRITE_STATUS_OK, rc)
+              : WriteResult((errno == EAGAIN || errno == EWOULDBLOCK)
+                                ? WRITE_STATUS_BLOCKED
+                                : WRITE_STATUS_ERROR,
+                            errno);
+#if defined(QUICHE_MOQ_TRACE)
+  result.moq_trace_sent_ns = sent_ns;
+#endif
+  return result;
 }
 
 }  // namespace quic

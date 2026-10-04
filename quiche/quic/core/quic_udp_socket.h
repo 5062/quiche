@@ -251,11 +251,19 @@ class QUICHE_EXPORT QuicUdpSocketApi {
     QuicUdpPacketInfo packet_info;
     BufferSpan packet_buffer;
     BufferSpan control_buffer;
+#if defined(QUICHE_MOQ_TRACE)
+    // When the receive system call that filled this result returned, on the
+    // moq-trace clock. Every packet in the buffer starts its lifecycle here.
+    uint64_t moq_trace_read_ns = 0;
+#endif
 
     void Reset(size_t packet_buffer_length) {
       ok = false;
       packet_info.Reset();
       packet_buffer.buffer_len = packet_buffer_length;
+#if defined(QUICHE_MOQ_TRACE)
+      moq_trace_read_ns = 0;
+#endif
     }
   };
   // Read a packet from |fd|:

@@ -41,11 +41,25 @@ code:
 
 | Call site | Emission |
 | --- | --- |
-| `QuicConnection::OnPacket`, `QuicConnection::FinishMoqTracePacket` | RX packet start and end, with the outcome; early framer returns close before processing another packet |
+| `QuicConnection::OnPacket`, `QuicConnection::FinishMoqTracePacket` | RX packet start at the completion of the receive system call that returned its datagram, a `read_queue` phase until processing begins, and the end with its outcome; early framer returns close before processing another packet |
 | `QuicConnection` public header, header unprotect, payload decrypt, frame processing | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, `frame_process` |
-| `QuicConnection::OnStreamFrame` | STREAM frame byte range and outcome |
-| `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start and end, phases `frame_encode` and `packet_encrypt` |
-| `QuicPacketReader::ReadAndDispatchPackets`, `QuicUdpSocketApi::WritePacket`, `QuicLinuxSocketUtils::WritePacket` and `WriteMultiplePackets` | UDP socket start and end at actual reads and sends, including batch flushes, with buffer, datagram, and byte counts; `ECONNRESET` records `connection_reset` |
+| `QuicStreamSequencer::OnFrameData`, `QuicConnection::OnStreamFrame` | STREAM frame byte range, stamped when the receive buffer accepted its bytes and before the stream is told; `dropped` for a frame the session or stream discarded |
+| `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start, phases `frame_encode` and `packet_encrypt`, then a `send_queue` phase |
+| `QuicConnection::WritePacket`, `FlushCoalescedPacket`, `WriteQueuedPackets`, `WritePacketUsingWriter` | TX packet end at the completion of the send system call that accepted its datagram, or `dropped` when that send failed |
+| `QuicConnection::SendPacketToWriter` | `quic_connection_path` before the first send and whenever the addresses a connection sends between change |
+| `QuicUdpSocketApi::ReadPacket`, `ReadMultiplePackets`, `WritePacket`, `QuicLinuxSocketUtils::WritePacket` and `WriteMultiplePackets` | UDP socket start and end around each system call, including batch flushes, with buffer, datagram, and byte counts; `ECONNRESET` records `connection_reset` |
+
+Packet lifecycles are bounded by the socket. The receive system call's
+completion travels with each packet on `QuicReceivedPacket`, which `Clone()`
+preserves for the dispatcher's buffered packet store, and then on
+`ReceivedPacketInfo`, which the connection keeps for coalesced packets and
+restores for undecryptable packets it replays, so every packet starts at its
+own read. A packet that came from no traced read, such as one a test builds,
+gets no trace. A TX packet waits in a `MoqTraceSend` holder that travels with
+its bytes through the coalescer and the write-blocked queue, and ends at the
+`WriteResult` of the send that carried it. A batch writer reports no traced
+send for the packets it only buffered, so those record abandonment; the relay
+uses `QuicDefaultPacketWriter`, which sends each packet at once.
 
 No sampling is applied. Analysis selects the packets that carry the objects it
 measures.

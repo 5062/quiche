@@ -766,6 +766,9 @@ class QUICHE_EXPORT QuicPacketCreator {
 
 #if defined(QUICHE_MOQ_TRACE)
   uint64_t moq_trace_connection_id_ = 0;
+  // Set while an Initial packet is re-serialized into a coalesced datagram,
+  // which must not start a second lifecycle for the same packet.
+  bool moq_trace_reserializing_ = false;
 #endif
 };
 

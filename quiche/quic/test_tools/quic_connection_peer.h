@@ -65,6 +65,13 @@ class QuicConnectionPeer {
   static size_t MoqTraceRxPacketLength(const QuicConnection& connection) {
     return connection.moq_trace_rx_packet_length_;
   }
+
+  // Starts the lifecycle of a packet a test injects without a traced read at
+  // its injection, as a read completing then would.
+  static void SetMoqTraceStampUnreadPackets(QuicConnection* connection,
+                                            bool stamp) {
+    connection->moq_trace_stamp_unread_packets_ = stamp;
+  }
 #endif
 
   static void SetSendAlgorithm(QuicConnection* connection,

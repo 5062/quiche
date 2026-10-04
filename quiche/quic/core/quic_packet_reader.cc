@@ -67,35 +67,10 @@ bool QuicPacketReader::ReadAndDispatchPackets(
   QUIC_CODE_COUNT(quic_record_tos_byte);
   // Note ToS bit will also populate ECN codepoint.
   info_bits.Set(QuicUdpPacketInfoBit::TOS);
-#if defined(QUICHE_MOQ_TRACE)
-  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
-  // The socket API reports failures only through errno, so a read that
-  // returns no packets leaves the cause there.
-  errno = 0;
-#endif
+  // QuicUdpSocketApi records each receive system call as a socket operation
+  // and stamps the results it fills with the instant that call returned.
   size_t packets_read =
       socket_api_.ReadMultiplePackets(fd, info_bits, &read_results_);
-#if defined(QUICHE_MOQ_TRACE)
-  const int read_error = errno;
-  quic_trace::SocketStats trace_stats;
-  trace_stats.buffers = packets_read;
-  for (size_t i = 0; i < packets_read; ++i) {
-    if (read_results_[i].ok) {
-      ++trace_stats.datagrams;
-      trace_stats.bytes += read_results_[i].packet_buffer.buffer_len;
-    }
-  }
-  quic_trace_socket_outcome trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_ERROR;
-  if (packets_read > 0 || read_error == 0) {
-    trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_SUCCESS;
-  } else if (read_error == EAGAIN || read_error == EWOULDBLOCK) {
-    trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_WOULD_BLOCK;
-  } else if (read_error == ECONNRESET) {
-    // An ICMP error queued on the socket, as Quinn records it.
-    trace_outcome = QUIC_TRACE_SOCKET_OUTCOME_CONNECTION_RESET;
-  }
-  trace_socket.finish(trace_outcome, trace_stats);
-#endif
   if (GetQuicReloadableFlag(quic_move_clock_now)) {
     QUIC_CODE_COUNT(quic_move_clock_now);
     now = clock.Now();
@@ -147,6 +122,11 @@ bool QuicPacketReader::ReadAndDispatchPackets(
         /*owns_buffer=*/false, ttl, has_ttl, headers, headers_length,
         /*owns_header_buffer=*/false, result.packet_info.ecn_codepoint(),
         result.packet_info.GetTos(), flow_label);
+#if defined(QUICHE_MOQ_TRACE)
+    // QuicUdpSocketApi stamped the receive system call that filled this
+    // result, and records that call as a socket operation itself.
+    packet.set_moq_trace_read_ns(result.moq_trace_read_ns);
+#endif
     QuicSocketAddress self_address(self_ip, port);
     processor->ProcessPacket(self_address, peer_address, packet);
   }

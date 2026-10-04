@@ -4,6 +4,10 @@
 
 #include "quiche/quic/test_tools/quic_test_utils.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -1436,7 +1440,13 @@ WriteResult TestPacketWriter::WritePacket(
     return WriteResult(WRITE_STATUS_OK, 0);
   }
   last_ecn_sent_ = params.ecn_codepoint;
-  return WriteResult(WRITE_STATUS_OK, last_packet_size_);
+  WriteResult result(WRITE_STATUS_OK, last_packet_size_);
+#if defined(QUICHE_MOQ_TRACE)
+  // The test writer stands in for an immediate send, so the packets it takes
+  // end now.
+  result.moq_trace_sent_ns = quic_trace::now_ns();
+#endif
+  return result;
 }
 
 QuicPacketBuffer TestPacketWriter::GetNextWriteLocation(

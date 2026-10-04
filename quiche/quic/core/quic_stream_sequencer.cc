@@ -25,6 +25,10 @@
 #include "quiche/quic/platform/api/quic_logging.h"
 #include "quiche/quic/platform/api/quic_stack_trace.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
+
 namespace quic {
 
 QuicStreamSequencer::QuicStreamSequencer(StreamInterface* quic_stream)
@@ -97,6 +101,13 @@ void QuicStreamSequencer::OnFrameData(QuicStreamOffset byte_offset,
     stream_->OnUnrecoverableError(result, details);
     return;
   }
+
+#if defined(QUICHE_MOQ_TRACE)
+  // The buffer holds the frame's bytes now, and nothing has told the stream,
+  // so this is the instant the frame was accepted. Duplicate bytes the buffer
+  // already held count as accepted.
+  stream_->OnMoqTraceDataAccepted(quic_trace::now_ns());
+#endif
 
   if (bytes_written == 0) {
     ++num_duplicate_frames_received_;

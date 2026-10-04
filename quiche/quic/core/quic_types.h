@@ -178,6 +178,12 @@ struct QUICHE_EXPORT WriteResult {
   //                      = (now + release_time_delay) + send_time_offset
   // Only valid if |status| is WRITE_STATUS_OK.
   QuicTime::Delta send_time_offset = QuicTime::Delta::Zero();
+#if defined(QUICHE_MOQ_TRACE)
+  // When the send system call that produced this result returned, on the
+  // moq-trace clock, or 0 when no system call was made. A traced packet the
+  // write carried ends at this instant.
+  uint64_t moq_trace_sent_ns = 0;
+#endif
   // TODO(wub): In some cases, WRITE_STATUS_ERROR may set an error_code and
   // WRITE_STATUS_BLOCKED_DATA_BUFFERED may set bytes_written. This may need
   // some cleaning up so that perhaps both values can be set and valid.

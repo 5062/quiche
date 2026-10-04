@@ -52,6 +52,13 @@ class QUICHE_EXPORT QuicStreamSequencer final {
 
     // Returns the QUIC version being used by this stream.
     virtual ParsedQuicVersion version() const = 0;
+
+#if defined(QUICHE_MOQ_TRACE)
+    // Called at |accepted_ns| on the moq-trace clock when the receive buffer
+    // accepted a frame's bytes, before the stream is told data is available.
+    // A frame whose bytes the buffer already held counts as accepted too.
+    virtual void OnMoqTraceDataAccepted(uint64_t /*accepted_ns*/) {}
+#endif
   };
 
   explicit QuicStreamSequencer(StreamInterface* quic_stream);

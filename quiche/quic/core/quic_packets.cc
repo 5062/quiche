@@ -383,17 +383,24 @@ QuicReceivedPacket::~QuicReceivedPacket() {
 std::unique_ptr<QuicReceivedPacket> QuicReceivedPacket::Clone() const {
   char* buffer = new char[this->length()];
   memcpy(buffer, this->data(), this->length());
+  std::unique_ptr<QuicReceivedPacket> clone;
   if (this->packet_headers()) {
     char* headers_buffer = new char[this->headers_length()];
     memcpy(headers_buffer, this->packet_headers(), this->headers_length());
-    return std::make_unique<QuicReceivedPacket>(
+    clone = std::make_unique<QuicReceivedPacket>(
         buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0,
         headers_buffer, this->headers_length(), true, this->ecn_codepoint());
+  } else {
+    clone = std::make_unique<QuicReceivedPacket>(
+        buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0,
+        nullptr, 0, false, this->ecn_codepoint());
   }
-
-  return std::make_unique<QuicReceivedPacket>(
-      buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0, nullptr,
-      0, false, this->ecn_codepoint());
+#if defined(QUICHE_MOQ_TRACE)
+  // A clone waits in the dispatcher's buffered packet store and is processed
+  // after a later read, but its lifecycle still starts at its own read.
+  clone->set_moq_trace_read_ns(moq_trace_read_ns_);
+#endif
+  return clone;
 }
 
 std::ostream& operator<<(std::ostream& os, const QuicReceivedPacket& s) {
@@ -457,7 +464,12 @@ SerializedPacket::SerializedPacket(SerializedPacket&& other)
       fate(other.fate),
       peer_address(other.peer_address),
       bytes_not_retransmitted(other.bytes_not_retransmitted),
-      initial_header(other.initial_header) {
+      initial_header(other.initial_header)
+#if defined(QUICHE_MOQ_TRACE)
+      ,
+      moq_trace_send(std::move(other.moq_trace_send))
+#endif
+{
   if (this != &other) {
     if (release_encrypted_buffer && encrypted_buffer != nullptr) {
       release_encrypted_buffer(encrypted_buffer);

@@ -140,6 +140,9 @@ PendingStream::PendingStream(QuicStreamId id, QuicSession& session)
                                                  session.version()) ==
                         BIDIRECTIONAL),
       connection_flow_controller_(session.flow_controller()),
+#if defined(QUICHE_MOQ_TRACE)
+      moq_trace_connection_(session.connection()),
+#endif
       flow_controller_(&session, id,
                        /*is_connection_flow_controller*/ false,
                        GetReceivedFlowControlWindow(&session, id),
@@ -185,6 +188,14 @@ void PendingStream::OnUnrecoverableError(QuicErrorCode error,
 }
 
 QuicStreamId PendingStream::id() const { return id_; }
+
+#if defined(QUICHE_MOQ_TRACE)
+void PendingStream::OnMoqTraceDataAccepted(uint64_t accepted_ns) {
+  if (moq_trace_connection_ != nullptr) {
+    moq_trace_connection_->RecordMoqTraceStreamFrameAccepted(accepted_ns);
+  }
+}
+#endif
 
 ParsedQuicVersion PendingStream::version() const { return version_; }
 
@@ -1067,6 +1078,15 @@ bool QuicStream::HasBufferedData() const {
 }
 
 ParsedQuicVersion QuicStream::version() const { return session_->version(); }
+
+#if defined(QUICHE_MOQ_TRACE)
+void QuicStream::OnMoqTraceDataAccepted(uint64_t accepted_ns) {
+  if (QuicConnection* connection = session_->connection();
+      connection != nullptr) {
+    connection->RecordMoqTraceStreamFrameAccepted(accepted_ns);
+  }
+}
+#endif
 
 QuicTransportVersion QuicStream::transport_version() const {
   return session_->transport_version();

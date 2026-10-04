@@ -924,6 +924,12 @@ class QUICHE_EXPORT QuicConnection
   }
 
 #if defined(QUICHE_MOQ_TRACE)
+  // Records when the receive buffer accepted the bytes of the STREAM frame
+  // being processed, which is that frame's moq-trace timestamp.
+  void RecordMoqTraceStreamFrameAccepted(uint64_t accepted_ns) {
+    moq_trace_stream_frame_accepted_ns_ = accepted_ns;
+  }
+
   uint64_t moq_trace_connection_id() const {
     return moq_trace_connection_id_;
   }
@@ -1746,6 +1752,11 @@ class QUICHE_EXPORT QuicConnection
     const QuicSocketAddress peer_address;
     QuicEcnCodepoint ecn_codepoint = ECN_NOT_ECT;
     uint32_t flow_label = 0;
+#if defined(QUICHE_MOQ_TRACE)
+    // The traced packets these bytes hold, which end when a later write
+    // finally sends them.
+    MoqTraceSend moq_trace_send;
+#endif
   };
 
   // ReceivedPacketInfo comprises the received packet information.
@@ -1778,6 +1789,13 @@ class QUICHE_EXPORT QuicConnection
     // on the preferred address. In this case, |destination_address| will
     // be overridden to the current default self address.
     QuicSocketAddress actual_destination_address;
+#if defined(QUICHE_MOQ_TRACE)
+    // When the receive system call that returned the datagram completed, on
+    // the moq-trace clock, or 0 for a datagram that came from no traced read.
+    // It travels with the packet info, so a coalesced packet and an
+    // undecryptable packet replayed later keep their original read.
+    uint64_t moq_trace_read_ns = 0;
+#endif
     // 8B remaining in the fourth cacheline.
     // TODO(martinduke): Remove once gfe2_reloadable_flag_quic_one_dcid is
     // deprecated.
@@ -2522,6 +2540,22 @@ class QUICHE_EXPORT QuicConnection
   int moq_trace_application_depth_ = 0;
   size_t moq_trace_rx_packet_length_ = 0;
   bool moq_trace_rx_control_packet_ = false;
+  // The traced packets coalesced into |coalesced_packet_|, which end when the
+  // coalesced datagram is sent.
+  MoqTraceSend moq_trace_coalesced_;
+  // When the stream's receive buffer accepted the STREAM frame being
+  // processed, set by the stream and cleared before each frame.
+  std::optional<uint64_t> moq_trace_stream_frame_accepted_ns_;
+  // The addresses the connection last recorded a `quic_connection_path` for.
+  std::optional<std::pair<QuicSocketAddress, QuicSocketAddress>>
+      moq_trace_path_;
+  // Tests that inject packets without a traced read set this, so their
+  // packets start at injection instead of going untraced.
+  bool moq_trace_stamp_unread_packets_ = false;
+  // Ends the traced packets of one write by its send's outcome. A write
+  // whose result names no traced send system call, such as one a batch writer
+  // only buffered, leaves its packets unfinished, so they record abandonment.
+  void FinishMoqTraceWrite(MoqTraceSend& send, const WriteResult& result);
 #endif
 
   // The ECN codepoint of the last packet to be sent to the writer, which

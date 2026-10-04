@@ -75,6 +75,9 @@ class QUICHE_EXPORT PendingStream
                             const std::string& details) override;
   QuicStreamId id() const override;
   ParsedQuicVersion version() const override;
+#if defined(QUICHE_MOQ_TRACE)
+  void OnMoqTraceDataAccepted(uint64_t accepted_ns) override;
+#endif
 
   // Buffers the contents of |frame|. Frame must have a non-zero offset.
   // If the data violates flow control, the connection will be closed.
@@ -140,6 +143,10 @@ class QUICHE_EXPORT PendingStream
 
   // Connection-level flow controller. Owned by the session.
   QuicFlowController* connection_flow_controller_;
+#if defined(QUICHE_MOQ_TRACE)
+  // The connection whose current packet a frame's acceptance belongs to.
+  QuicConnection* moq_trace_connection_;
+#endif
   // Stream-level flow controller.
   QuicFlowController flow_controller_;
   // Stores the buffered frames.
@@ -172,6 +179,9 @@ class QUICHE_EXPORT QuicStream : public QuicStreamSequencer::StreamInterface {
   // QuicStreamSequencer::StreamInterface implementation.
   QuicStreamId id() const override { return id_; }
   ParsedQuicVersion version() const override;
+#if defined(QUICHE_MOQ_TRACE)
+  void OnMoqTraceDataAccepted(uint64_t accepted_ns) override;
+#endif
   // Called by the stream subclass after it has consumed the final incoming
   // data.
   void OnFinRead() override;
