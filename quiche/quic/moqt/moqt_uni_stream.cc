@@ -76,13 +76,19 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
   options.set_send_fin(!type.IsFetch() && object.fin_after_this);
 #if defined(QUICHE_MOQ_TRACE)
   moq_trace::ObjectPhase write_phase;
+  moq_trace::ObjectPhase transport_call;
   if (trace_object_.has_value()) {
     write_phase = trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
+    // The stream builds and sends packets inside Writev, which is transport
+    // work nested in the write.
+    transport_call = trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_TRANSPORT_CALL);
   }
 #endif
   absl::Status write_status =
       stream_.Writev(absl::MakeSpan(write_vector), options);
 #if defined(QUICHE_MOQ_TRACE)
+  transport_call.finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                          : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
   if (trace_object_.has_value()) {
     trace_object_->set_stream_offset_end(stream_.WriteOffset());
   }
@@ -261,13 +267,19 @@ void OutgoingSubgroupStream::SendObjects() {
       options.set_send_fin(object->fin_after_this);
 #if defined(QUICHE_MOQ_TRACE)
       moq_trace::ObjectPhase write_phase;
+      moq_trace::ObjectPhase transport_call;
       if (trace_object().has_value()) {
         write_phase = trace_object()->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
+        transport_call =
+            trace_object()->phase(MOQ_TRACE_OBJECT_PHASE_TRANSPORT_CALL);
       }
 #endif
       absl::Status write_status =
           stream().Writev(absl::MakeSpan(object->payload), options);
 #if defined(QUICHE_MOQ_TRACE)
+      transport_call.finish(write_status.ok()
+                                ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                                : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
       if (trace_object().has_value()) {
         trace_object()->set_stream_offset_end(stream().WriteOffset());
       }

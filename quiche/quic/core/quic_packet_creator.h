@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/base/attributes.h"
 #include "absl/strings/string_view.h"
@@ -708,6 +709,12 @@ class QUICHE_EXPORT QuicPacketCreator {
 
   // Frames to be added to the next SerializedPacket
   QuicFrames queued_frames_;
+#if defined(QUICHE_MOQ_TRACE)
+  // Whether each queued frame resends data an earlier packet carried, in the
+  // order of `queued_frames_`. A packet's own transmission type follows its
+  // last retransmitted frame, so it cannot tell the frames apart.
+  std::vector<bool> moq_trace_queued_retransmissions_;
+#endif
 
   // Serialization size of header + frames. If there is no queued frames,
   // packet_size_ is 0.

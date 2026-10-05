@@ -3673,6 +3673,34 @@ void QuicConnection::MaybeBundleOpportunistically(
 }
 
 bool QuicConnection::CanWrite(HasRetransmittableData retransmittable) {
+#if defined(QUICHE_MOQ_TRACE)
+  moq_trace_blocked_now_.reset();
+  const bool can_write = CanWriteData(retransmittable);
+  // Only data waits on these checks; acknowledgments bypass them.
+  if (retransmittable == HAS_RETRANSMITTABLE_DATA) {
+    MoqTraceUpdateSendBlocked();
+  }
+  return can_write;
+}
+
+void QuicConnection::MoqTraceUpdateSendBlocked() {
+  for (auto [reason, interval] :
+       {std::pair{QUIC_TRACE_SEND_BLOCKED_REASON_CONGESTION_WINDOW,
+                  &moq_trace_blocked_congestion_window_},
+        std::pair{QUIC_TRACE_SEND_BLOCKED_REASON_PACING,
+                  &moq_trace_blocked_pacing_},
+        std::pair{QUIC_TRACE_SEND_BLOCKED_REASON_AMPLIFICATION,
+                  &moq_trace_blocked_amplification_}}) {
+    if (moq_trace_blocked_now_ != reason) {
+      interval->finish();
+    } else if (!interval->active()) {
+      *interval = quic_trace::SendBlocked(moq_trace_connection_id_, reason);
+    }
+  }
+}
+
+bool QuicConnection::CanWriteData(HasRetransmittableData retransmittable) {
+#endif
   if (!connected_) {
     return false;
   }
@@ -3718,6 +3746,9 @@ bool QuicConnection::CanWrite(HasRetransmittableData retransmittable) {
                   << ", bytes sent"
                   << default_path_.bytes_sent_before_address_validation;
     ++stats_.num_amplification_throttling;
+#if defined(QUICHE_MOQ_TRACE)
+    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_AMPLIFICATION;
+#endif
     return false;
   }
 
@@ -3731,12 +3762,20 @@ bool QuicConnection::CanWrite(HasRetransmittableData retransmittable) {
   }
   // If the send alarm is set, wait for it to fire.
   if (send_alarm().IsSet()) {
+#if defined(QUICHE_MOQ_TRACE)
+    // Only the pacing delay below sets the send alarm.
+    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_PACING;
+#endif
     return false;
   }
 
   QuicTime now = clock_->Now();
   QuicTime::Delta delay = sent_packet_manager_.TimeUntilSend(now);
   if (delay.IsInfinite()) {
+#if defined(QUICHE_MOQ_TRACE)
+    // An infinite delay means the congestion window is full.
+    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_CONGESTION_WINDOW;
+#endif
     send_alarm().Cancel();
     return false;
   }
@@ -3748,6 +3787,9 @@ bool QuicConnection::CanWrite(HasRetransmittableData retransmittable) {
       return true;
     }
     // Cannot send packet now because delay is too far in the future.
+#if defined(QUICHE_MOQ_TRACE)
+    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_PACING;
+#endif
     send_alarm().Update(now + delay, kAlarmGranularity);
     QUIC_DVLOG(1) << ENDPOINT << "Delaying sending " << delay.ToMilliseconds()
                   << "ms";

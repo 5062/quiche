@@ -97,15 +97,19 @@ void FinishTxPacketTrace(quic_trace::Packet& packet,
   send.Add(std::move(packet));
 }
 
-void TraceStreamFrames(quic_trace::Packet& packet, const QuicFrames& frames) {
-  for (const QuicFrame& frame : frames) {
+// `retransmissions` holds, for each of `frames`, whether it resends data.
+void TraceStreamFrames(quic_trace::Packet& packet, const QuicFrames& frames,
+                       const std::vector<bool>& retransmissions) {
+  for (size_t i = 0; i < frames.size(); ++i) {
+    const QuicFrame& frame = frames[i];
     if (frame.type != STREAM_FRAME || frame.stream_frame.data_length == 0) {
       continue;
     }
     packet.stream_frame(
         frame.stream_frame.stream_id, frame.stream_frame.offset,
         frame.stream_frame.offset + frame.stream_frame.data_length,
-        QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+        QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
+        i < retransmissions.size() && retransmissions[i]);
   }
 }
 #endif
@@ -784,7 +788,8 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
   trace_packet.set_byte_len(encrypted_length);
   trace_packet.stream_frame(frame.stream_id, frame.offset,
                             frame.offset + frame.data_length,
-                            QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+                            QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
+                            transmission_type != NOT_RETRANSMISSION);
   // The packet ends when the send carrying it returns, so it travels with
   // its bytes until then.
   packet_.moq_trace_send.Add(std::move(trace_packet));
@@ -1026,7 +1031,8 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
 #if defined(QUICHE_MOQ_TRACE)
   trace_encrypt.finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
   trace_packet.set_byte_len(packet_.encrypted_length);
-  TraceStreamFrames(trace_packet, queued_frames_);
+  TraceStreamFrames(trace_packet, queued_frames_,
+                    moq_trace_queued_retransmissions_);
   // The packet ends when the send carrying it returns, so it travels with
   // its bytes until then.
   packet_.moq_trace_send.Add(std::move(trace_packet));
@@ -2198,6 +2204,15 @@ bool QuicPacketCreator::AddFrame(const QuicFrame& frame,
 
   if (frame.type == STREAM_FRAME) {
     if (MaybeCoalesceStreamFrame(frame.stream_frame)) {
+#if defined(QUICHE_MOQ_TRACE)
+      // A frame that also carries new data is a first transmission of it, so
+      // coverage still finds those bytes.
+      if (!moq_trace_queued_retransmissions_.empty()) {
+        moq_trace_queued_retransmissions_.back() =
+            moq_trace_queued_retransmissions_.back() &&
+            transmission_type != NOT_RETRANSMISSION;
+      }
+#endif
       LogCoalesceStreamFrameStatus(true);
       return true;
     } else {
@@ -2234,6 +2249,10 @@ bool QuicPacketCreator::AddFrame(const QuicFrame& frame,
   if (QuicUtils::IsRetransmittableFrame(frame.type)) {
     packet_.retransmittable_frames.push_back(frame);
     queued_frames_.push_back(frame);
+#if defined(QUICHE_MOQ_TRACE)
+    moq_trace_queued_retransmissions_.push_back(transmission_type !=
+                                                NOT_RETRANSMISSION);
+#endif
     if (QuicUtils::IsHandshakeFrame(frame, framer_->transport_version())) {
       packet_.has_crypto_handshake = IS_HANDSHAKE;
     }
@@ -2248,6 +2267,9 @@ bool QuicPacketCreator::AddFrame(const QuicFrame& frame,
       packet_.nonretransmittable_frames.push_back(frame);
     }
     queued_frames_.push_back(frame);
+#if defined(QUICHE_MOQ_TRACE)
+    moq_trace_queued_retransmissions_.push_back(false);
+#endif
   }
 
   if (frame.type == ACK_FRAME) {
@@ -2637,6 +2659,9 @@ QuicPacketCreator::ScopedSerializationFailureHandler::
   }
   // Always clear queued_frames_.
   creator_->queued_frames_.clear();
+#if defined(QUICHE_MOQ_TRACE)
+  creator_->moq_trace_queued_retransmissions_.clear();
+#endif
 
   if (creator_->packet_.encrypted_buffer == nullptr) {
     const std::string error_details = "Failed to SerializePacket.";

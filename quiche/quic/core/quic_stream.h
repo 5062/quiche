@@ -45,6 +45,10 @@
 #include "quiche/common/platform/api/quiche_reference_counted.h"
 #include "quiche/common/quiche_mem_slice.h"
 
+#if defined(QUICHE_MOQ_TRACE)
+#include <quic_trace/trace.hpp>
+#endif
+
 namespace quic {
 
 namespace test {
@@ -573,6 +577,21 @@ class QUICHE_EXPORT QuicStream : public QuicStreamSequencer::StreamInterface {
 
   // Write buffered data (in send buffer) at |level|.
   void WriteBufferedData(EncryptionLevel level);
+
+#if defined(QUICHE_MOQ_TRACE)
+  // Opens or ends the interval in which flow control holds this stream's
+  // buffered data, after a write decided how much it may send.
+  void MoqTraceFlowControl();
+  // The id moq-trace events of this stream's connection carry.
+  uint64_t MoqTraceConnectionId() const;
+
+  quic_trace::SendBlocked moq_trace_flow_blocked_;
+  quic_trace_send_blocked_reason moq_trace_flow_reason_ =
+      QUIC_TRACE_SEND_BLOCKED_REASON_STREAM_FLOW_CONTROL;
+  // The interval in which the send buffer refuses new data. It follows the
+  // answers `CanWriteNewData` gives, and that query is const.
+  mutable quic_trace::SendBlocked moq_trace_buffer_blocked_;
+#endif
 
   // Called when bytes are sent to the peer.
   void AddBytesSent(QuicByteCount bytes);

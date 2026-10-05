@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
@@ -1080,6 +1081,30 @@ bool QuicStream::HasBufferedData() const {
 ParsedQuicVersion QuicStream::version() const { return session_->version(); }
 
 #if defined(QUICHE_MOQ_TRACE)
+uint64_t QuicStream::MoqTraceConnectionId() const {
+  QuicConnection* connection = session_->connection();
+  return connection == nullptr ? 0 : connection->moq_trace_connection_id();
+}
+
+void QuicStream::MoqTraceFlowControl() {
+  const bool blocked = !write_side_closed_ && HasBufferedData() &&
+                       CalculateSendWindowSize() == 0;
+  if (!blocked) {
+    moq_trace_flow_blocked_.finish();
+    return;
+  }
+  const quic_trace_send_blocked_reason reason =
+      flow_controller_.has_value() && flow_controller_->SendWindowSize() == 0
+          ? QUIC_TRACE_SEND_BLOCKED_REASON_STREAM_FLOW_CONTROL
+          : QUIC_TRACE_SEND_BLOCKED_REASON_CONNECTION_FLOW_CONTROL;
+  if (moq_trace_flow_blocked_.active() && moq_trace_flow_reason_ == reason) {
+    return;
+  }
+  moq_trace_flow_blocked_ =
+      quic_trace::SendBlocked(MoqTraceConnectionId(), reason, id());
+  moq_trace_flow_reason_ = reason;
+}
+
 void QuicStream::OnMoqTraceDataAccepted(uint64_t accepted_ns) {
   if (QuicConnection* connection = session_->connection();
       connection != nullptr) {
@@ -1411,6 +1436,9 @@ bool QuicStream::WriteStreamData(QuicStreamOffset offset,
 
 void QuicStream::WriteBufferedData(EncryptionLevel level) {
   QUICHE_DCHECK(!write_side_closed_ && (HasBufferedData() || fin_buffered_));
+#if defined(QUICHE_MOQ_TRACE)
+  absl::Cleanup moq_trace_flow_control = [this] { MoqTraceFlowControl(); };
+#endif
 
   if (session_->ShouldYield(id())) {
     session_->MarkConnectionLevelWriteBlocked(id());
@@ -1521,7 +1549,18 @@ uint64_t QuicStream::BufferedDataBytes() const {
 }
 
 bool QuicStream::CanWriteNewData() const {
-  return BufferedDataBytes() < buffered_data_threshold_;
+  const bool can_write = BufferedDataBytes() < buffered_data_threshold_;
+#if defined(QUICHE_MOQ_TRACE)
+  // A writer is blocked from the first refusal until it is accepted again.
+  if (can_write) {
+    moq_trace_buffer_blocked_.finish();
+  } else if (!moq_trace_buffer_blocked_.active()) {
+    moq_trace_buffer_blocked_ = quic_trace::SendBlocked(
+        MoqTraceConnectionId(), QUIC_TRACE_SEND_BLOCKED_REASON_SEND_BUFFER,
+        id());
+  }
+#endif
+  return can_write;
 }
 
 bool QuicStream::CanWriteNewDataAfterData(QuicByteCount length) const {

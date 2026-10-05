@@ -2530,6 +2530,18 @@ class QUICHE_EXPORT QuicConnection
   Perspective perspective_;
 
 #if defined(QUICHE_MOQ_TRACE)
+  // Decides `CanWrite`, recording in `moq_trace_blocked_now_` the check that
+  // stopped data from being sent, if one of the traced checks did.
+  bool CanWriteData(HasRetransmittableData retransmittable);
+  // Opens the blocked interval for `moq_trace_blocked_now_` and ends every
+  // other, after a `CanWrite` for data. An interval ends at the first such
+  // call its check no longer stops, which is when the data could go out.
+  void MoqTraceUpdateSendBlocked();
+  std::optional<quic_trace_send_blocked_reason> moq_trace_blocked_now_;
+  quic_trace::SendBlocked moq_trace_blocked_congestion_window_;
+  quic_trace::SendBlocked moq_trace_blocked_pacing_;
+  quic_trace::SendBlocked moq_trace_blocked_amplification_;
+
   const uint64_t moq_trace_connection_id_;
   std::optional<quic_trace::Packet> moq_trace_rx_packet_;
   std::optional<quic_trace::PacketPhase> moq_trace_rx_header_parse_;
