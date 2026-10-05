@@ -127,6 +127,11 @@ OutgoingSubgroupStream::OutgoingSubgroupStream(
 }
 
 OutgoingSubgroupStream::~OutgoingSubgroupStream() {
+#if defined(QUICHE_MOQ_TRACE)
+  // The stream is going away with a copy unfinished, so it was reset or closed
+  // under the copy.
+  FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_RESET);
+#endif
   // Though it might seem intuitive that the session object has to outlive the
   // connection object (and this is indeed how something like QuicSession and
   // QuicStream works), this is not the true for WebTransport visitors: the
@@ -147,6 +152,9 @@ void OutgoingSubgroupStream::OnCanWrite() { SendObjects(); }
 
 void OutgoingSubgroupStream::OnStopSendingReceived(
     webtransport::StreamErrorCode error_code) {
+#if defined(QUICHE_MOQ_TRACE)
+  FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_RESET);
+#endif
   SubscriptionPublisherInterface* visitor = visitor_.GetIfAvailable();
   if (visitor != nullptr) {
     visitor->OnSubgroupAbandoned(index_.group, index_.subgroup, error_code);
@@ -154,6 +162,9 @@ void OutgoingSubgroupStream::OnStopSendingReceived(
 }
 
 void OutgoingSubgroupStream::DeliveryTimeoutDelegate::OnAlarm() {
+#if defined(QUICHE_MOQ_TRACE)
+  stream_->FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_EXPIRED);
+#endif
   SubscriptionPublisherInterface* visitor = stream_->visitor_.GetIfAvailable();
   if (visitor != nullptr) {
     visitor->OnStreamTimeout(stream_->index_);
@@ -225,6 +236,10 @@ void OutgoingSubgroupStream::SendObjects() {
     }
 #endif
     if (!visitor->InWindow(object->metadata.location)) {
+#if defined(QUICHE_MOQ_TRACE)
+      // The subscription no longer wants this object, so the relay drops it.
+      FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_DROPPED);
+#endif
       // It is possible that the next object became irrelevant due to a
       // REQUEST_UPDATE.  Close the stream if so.
       absl::Status status = webtransport::SendFinOnStream(stream());
@@ -237,6 +252,9 @@ void OutgoingSubgroupStream::SendObjects() {
     if (!visitor->alternate_delivery_timeout() &&
         visitor->clock()->ApproximateNow() - object->metadata.arrival_time >
             delivery_timeout) {
+#if defined(QUICHE_MOQ_TRACE)
+      FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_EXPIRED);
+#endif
       visitor->OnStreamTimeout(index_);
       stream().ResetWithUserCode(kResetCodeDeliveryTimeout);
       // No class access below this line.
@@ -291,11 +309,17 @@ void OutgoingSubgroupStream::SendObjects() {
             << "Writing into MoQT stream failed despite CanWrite() being true "
                "before; status: "
             << write_status;
+#if defined(QUICHE_MOQ_TRACE)
+        FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+#endif
         stream().ResetWithUserCode(kResetCodeInternalError);
         return;
       }
     } else {
       if (!WriteObjectToStream(*object, type_)) {
+#if defined(QUICHE_MOQ_TRACE)
+        FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+#endif
         stream().ResetWithUserCode(kResetCodeInternalError);
         // No class access below this line.
         return;
@@ -441,7 +465,24 @@ void OutgoingFetchStream::OnStopSendingReceived(
   stream().ResetWithUserCode(error_code);
 }
 
+void IncomingDataStream::OnResetStreamReceived(webtransport::StreamErrorCode) {
+#if defined(QUICHE_MOQ_TRACE)
+  // The publisher reset the stream before the object in progress arrived.
+  if (trace_object_.has_value()) {
+    trace_object_->finish(MOQ_TRACE_OBJECT_OUTCOME_RESET);
+    trace_object_.reset();
+  }
+#endif
+}
+
 IncomingDataStream::~IncomingDataStream() {
+#if defined(QUICHE_MOQ_TRACE)
+  // The stream is going away before the object in progress arrived.
+  if (trace_object_.has_value()) {
+    trace_object_->finish(MOQ_TRACE_OBJECT_OUTCOME_RESET);
+    trace_object_.reset();
+  }
+#endif
   QUICHE_DVLOG(1) << "Destroying incoming data stream "
                   << stream_->GetStreamId();
   if (!parser_.track_alias().has_value()) {

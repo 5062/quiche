@@ -79,6 +79,13 @@ class OutgoingUniStream : public webtransport::StreamVisitor {
   }
 #if defined(QUICHE_MOQ_TRACE)
   std::optional<moq_trace::Object>& trace_object() { return trace_object_; }
+  // Ends the copy in progress, if any, with how the stream stopped it.
+  void FinishTraceObject(moq_trace_object_outcome outcome) {
+    if (trace_object_.has_value()) {
+      trace_object_->finish(outcome);
+      trace_object_.reset();
+    }
+  }
 #endif
 
   // Writes an object to the stream. Returns false if the write failed. The
@@ -248,7 +255,7 @@ class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
   // webtransport::StreamVisitor implementation.
   void OnCanRead() override;
   void OnCanWrite() override {}
-  void OnResetStreamReceived(webtransport::StreamErrorCode) override {}
+  void OnResetStreamReceived(webtransport::StreamErrorCode) override;
   void OnStopSendingReceived(webtransport::StreamErrorCode /*error*/) override {
   }
   void OnWriteSideInDataRecvdState() override {}
