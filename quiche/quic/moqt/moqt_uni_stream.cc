@@ -156,6 +156,19 @@ void OutgoingSubgroupStream::DeliveryTimeoutDelegate::OnAlarm() {
 }
 
 void OutgoingSubgroupStream::SendObjects() {
+#if defined(QUICHE_MOQ_TRACE)
+  // A blocked write ends once the stream accepts writes again. A listener can
+  // call in while the stream is still blocked, and that does not end it.
+  if (trace_blocked_since_ns_.has_value() && stream().CanWrite()) {
+    if (trace_object().has_value()) {
+      trace_object()
+          ->phase_at(MOQ_TRACE_OBJECT_PHASE_WRITE_BLOCKED,
+                     *trace_blocked_since_ns_)
+          .finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+    }
+    trace_blocked_since_ns_.reset();
+  }
+#endif
   SubscriptionPublisherInterface* visitor = visitor_.GetIfAvailable();
   if (visitor == nullptr) {
     return;
@@ -191,6 +204,15 @@ void OutgoingSubgroupStream::SendObjects() {
       context.start_ns = clone_start_ns;
       context.payload_bytes = object->metadata.payload_length;
       trace_object().emplace(context);
+      // The copy waited from the instant the cache made the object readable
+      // until this clone. Listeners run synchronously, so the wait includes
+      // delivering the object to subscribers notified before this one.
+      if (object->metadata.trace_ready_ns.has_value()) {
+        trace_object()
+            ->phase_at(MOQ_TRACE_OBJECT_PHASE_DELIVERY_WAIT,
+                       *object->metadata.trace_ready_ns)
+            .finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, clone_start_ns);
+      }
       auto clone = trace_object()->phase_at(MOQ_TRACE_OBJECT_PHASE_CLONE,
                                             clone_start_ns);
       clone.finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
@@ -287,6 +309,14 @@ void OutgoingSubgroupStream::SendObjects() {
       CreateAndSetAlarm(object->metadata.arrival_time + delivery_timeout);
     }
   }
+#if defined(QUICHE_MOQ_TRACE)
+  // The loop also ends when no object is ready, so only a stream that stopped
+  // accepting writes blocks the copy in progress.
+  if (trace_object().has_value() && !trace_blocked_since_ns_.has_value() &&
+      !stream().CanWrite()) {
+    trace_blocked_since_ns_ = quic_trace::now_ns();
+  }
+#endif
 }
 
 void OutgoingSubgroupStream::Fin(Location last_object) {

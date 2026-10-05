@@ -183,8 +183,14 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     }
 #if defined(QUICHE_MOQ_TRACE)
     if (inserted) {
-      metadata.trace_logical_id = moq_trace::next_logical_id();
-      it->second.SetTraceLogicalId(*metadata.trace_logical_id);
+      if (!group.trace_next_logical_id.has_value()) {
+        group.trace_next_logical_id = moq_trace::next_logical_id();
+      }
+      metadata.trace_logical_id = *group.trace_next_logical_id;
+      ++group.trace_next_logical_id->frame;
+      // The object is readable from the cache once inserted above.
+      it->second.SetTraceIdentity(*metadata.trace_logical_id,
+                                  quic_trace::now_ns());
     }
 #endif
   }

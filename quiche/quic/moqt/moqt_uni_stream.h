@@ -183,6 +183,11 @@ class QUICHE_EXPORT OutgoingSubgroupStream : public OutgoingUniStream {
   // Number of payload bytes from next_object_ that has already been written
   // to the stream.
   uint64_t already_delivered_ = 0;
+#if defined(QUICHE_MOQ_TRACE)
+  // When the stream stopped accepting writes in the middle of a traced copy.
+  // The copy's blocked write lasts until the stream can take more.
+  std::optional<uint64_t> trace_blocked_since_ns_;
+#endif
 
   // If this data stream is for SUBSCRIBE, reset it if an object has been
   // excessively delayed per Section 7.1.1.2.

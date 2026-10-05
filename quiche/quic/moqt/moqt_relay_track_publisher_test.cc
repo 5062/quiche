@@ -405,6 +405,30 @@ TEST_F(MoqtRelayTrackPublisherTest, DuplicateObjectChangedMetadata) {
   EXPECT_TRUE(track_deleted_);
 }
 
+#if defined(QUICHE_MOQ_TRACE)
+// Every object of a group shares one logical group instance, and its frame is
+// its zero-based ordinal within the group, so the analysis can tell a group's
+// first object, which pays for the stream, from the rest.
+TEST_F(MoqtRelayTrackPublisherTest, ObjectsOfAGroupShareItsLogicalGroup) {
+  SubscribeAndOk();
+  const Location first = kLargestLocation.Next();
+  const Location second = first.Next();
+  const Location next_group(first.group + 1, 0);
+  ObjectArrives(first, 0, MoqtObjectStatus::kNormal, "a");
+  ObjectArrives(second, 0, MoqtObjectStatus::kNormal, "b");
+  ObjectArrives(next_group, 0, MoqtObjectStatus::kNormal, "c");
+  auto logical_id = [&](Location location) {
+    return *publisher_.GetCachedObject(location.group, 0, location.object)
+                ->metadata.trace_logical_id;
+  };
+  EXPECT_EQ(logical_id(first).frame, 0u);
+  EXPECT_EQ(logical_id(second).group, logical_id(first).group);
+  EXPECT_EQ(logical_id(second).frame, 1u);
+  EXPECT_NE(logical_id(next_group).group, logical_id(first).group);
+  EXPECT_EQ(logical_id(next_group).frame, 0u);
+}
+#endif
+
 // The status of an object that arrives in fragments is only known once the last
 // fragment arrives, because the end of a group is signaled by the stream FIN.
 // A partial object must not be compared against the final status, and it must
@@ -428,6 +452,13 @@ TEST_F(MoqtRelayTrackPublisherTest, FragmentedObjectStatusIsKnownAtTheEnd) {
   publisher_.OnObjectFragment(kTrackName, first_fragment, "obj", /*offset=*/0);
 #if defined(QUICHE_MOQ_TRACE)
   ASSERT_TRUE(first_fragment.trace_logical_id.has_value());
+  // Copies start their delivery wait at the instant the cache made the first
+  // fragment readable, which the cached object carries.
+  std::optional<PublishedObject> partial =
+      publisher_.GetCachedObject(location.group, 0, location.object);
+  ASSERT_TRUE(partial.has_value());
+  ASSERT_TRUE(partial->metadata.trace_ready_ns.has_value());
+  const uint64_t ready_ns = *partial->metadata.trace_ready_ns;
 #endif
   // Nothing is complete yet, so no track state is known.
   EXPECT_EQ(publisher_.largest_location(), std::nullopt);
@@ -448,6 +479,10 @@ TEST_F(MoqtRelayTrackPublisherTest, FragmentedObjectStatusIsKnownAtTheEnd) {
 #if defined(QUICHE_MOQ_TRACE)
   EXPECT_EQ(final_fragment.trace_logical_id,
             first_fragment.trace_logical_id);
+  // A later fragment does not move the readable instant.
+  EXPECT_EQ(publisher_.GetCachedObject(location.group, 0, location.object)
+                ->metadata.trace_ready_ns,
+            ready_ns);
 #endif
   EXPECT_FALSE(track_deleted_);
   EXPECT_EQ(publisher_.largest_location(), location);

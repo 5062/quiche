@@ -130,6 +130,12 @@ class MoqtRelayTrackPublisher : public MoqtTrackPublisher,
     bool complete = false;  // If true, kEndOfGroup has been received.
     absl::btree_map<uint64_t, Subgroup> subgroups;  // Ordered by subgroup id.
     std::map<uint64_t, CachedObject> datagrams;
+#if defined(QUICHE_MOQ_TRACE)
+    // The logical identity of the group's next new object: one process-wide
+    // group instance shared by every object of the group, and the zero-based
+    // ordinal of the object within it, which the trace contract requires.
+    std::optional<moq_trace::LogicalId> trace_next_logical_id;
+#endif
   };
 
   bool is_closing_ = false;
