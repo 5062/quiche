@@ -97,7 +97,7 @@ inline constexpr QuicPacketCount kMinCongestionWindowForBandwidthResumption =
     10;
 
 // Default size of the socket receive buffer in bytes.
-inline constexpr QuicByteCount kDefaultSocketReceiveBuffer = 1024 * 1024;
+inline constexpr QuicByteCount kDefaultSocketReceiveBuffer = 8 * 1024 * 1024;
 
 // The lower bound of an untrusted initial rtt value.
 inline constexpr uint32_t kMinUntrustedInitialRoundTripTimeUs =
