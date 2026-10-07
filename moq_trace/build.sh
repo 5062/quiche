@@ -86,6 +86,14 @@ else
       trace+=(--cxxopt="$flag")
     fi
   done
+  # The facade headers reach the compiler through CPLUS_INCLUDE_PATH, outside
+  # Bazel's input tracking, so reinstalling the toolkit would leave objects
+  # compiled against the old headers in the cache. Putting the headers' digest
+  # on the command line rebuilds every C++ action when they change. POSIX cksum
+  # reads stdin everywhere, which not every sha256sum on PATH does.
+  header_digest=$(find "${trace_include_paths[@]}" -path '*_trace/*' -type f \
+    -print0 | sort -z | xargs -0 cat | cksum | cut -d' ' -f1)
+  trace+=(--cxxopt=-DQUICHE_MOQ_TRACE_HEADERS="$header_digest")
   read -r -a trace_libs <<< "$(pkg-config --libs moq_trace)"
   for flag in "${trace_libs[@]}"; do trace+=(--linkopt="$flag"); done
 fi
