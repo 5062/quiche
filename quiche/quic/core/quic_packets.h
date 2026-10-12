@@ -28,9 +28,6 @@
 #include "quiche/common/quiche_endian.h"
 
 #if defined(QUICHE_MOQ_TRACE)
-#include <utility>
-#include <vector>
-
 #include <quic_trace/trace.hpp>
 #endif
 
@@ -391,63 +388,6 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
 #endif
 };
 
-#if defined(QUICHE_MOQ_TRACE)
-// The traced packets one write carries.
-//
-// A packet's moq-trace lifecycle ends when the send system call that accepts
-// its datagram returns. Packets therefore wait here in their send_queue phase
-// while their bytes move through coalescing, the write-blocked queue, and the
-// writer, and the holder travels with the bytes. Destroying the holder records
-// every packet still in it as abandoned: a packet that was never sent, or one
-// handed to a writer that sends it later without telling when.
-class QUICHE_EXPORT QuicTraceSend {
- public:
-  QuicTraceSend() = default;
-  QuicTraceSend(QuicTraceSend&&) = default;
-  QuicTraceSend& operator=(QuicTraceSend&&) = default;
-  QuicTraceSend(const QuicTraceSend&) = delete;
-  QuicTraceSend& operator=(const QuicTraceSend&) = delete;
-
-  // Holds a packet whose encryption just ended and starts its send_queue phase.
-  void Add(quic_trace::Packet packet) {
-    quic_trace::PacketPhase queue =
-        packet.phase(QUIC_TRACE_PACKET_PHASE_SEND_QUEUE);
-    packets_.emplace_back(std::move(packet), std::move(queue));
-  }
-
-  // Takes every packet of |other|, as when packets coalesce into one datagram.
-  void Append(QuicTraceSend&& other) {
-    for (auto& entry : other.packets_) {
-      packets_.push_back(std::move(entry));
-    }
-    other.packets_.clear();
-  }
-
-  // Ends every packet at |sent_ns|, when the send that accepted them returned.
-  void Sent(uint64_t sent_ns) {
-    Finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS, sent_ns);
-  }
-
-  // Ends every packet as dropped at |at_ns|, when the send that failed
-  // returned: the kernel never put them on the wire.
-  void Dropped(uint64_t at_ns) {
-    Finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED, at_ns);
-  }
-
-  bool empty() const { return packets_.empty(); }
-
- private:
-  void Finish(quic_trace_packet_outcome outcome, uint64_t at_ns) {
-    for (auto& [packet, queue] : packets_) {
-      queue.finish_at(outcome, at_ns);
-      packet.finish_at(outcome, at_ns);
-    }
-    packets_.clear();
-  }
-
-  std::vector<std::pair<quic_trace::Packet, quic_trace::PacketPhase>> packets_;
-};
-#endif
 
 // SerializedPacket contains information of a serialized(encrypted) packet.
 //
@@ -510,7 +450,7 @@ struct QUICHE_EXPORT SerializedPacket {
 #if defined(QUICHE_MOQ_TRACE)
   // The traced packet these bytes hold, waiting for its send. Moves with the
   // packet; a copy made by CopySerializedPacket does not carry it.
-  QuicTraceSend quic_trace_send;
+  quic_trace::PendingSend quic_trace_send;
 #endif
 };
 

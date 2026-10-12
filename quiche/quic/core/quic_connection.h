@@ -1755,7 +1755,7 @@ class QUICHE_EXPORT QuicConnection
 #if defined(QUICHE_MOQ_TRACE)
     // The traced packets these bytes hold, which end when a later write
     // finally sends them.
-    QuicTraceSend quic_trace_send;
+    quic_trace::PendingSend quic_trace_send;
 #endif
   };
 
@@ -2554,7 +2554,7 @@ class QUICHE_EXPORT QuicConnection
   bool quic_trace_rx_control_packet_ = false;
   // The traced packets coalesced into |coalesced_packet_|, which end when the
   // coalesced datagram is sent.
-  QuicTraceSend quic_trace_coalesced_;
+  quic_trace::PendingSend quic_trace_coalesced_;
   // When the stream's receive buffer accepted the STREAM frame being
   // processed, set by the stream and cleared before each frame.
   std::optional<uint64_t> quic_trace_stream_frame_accepted_ns_;
@@ -2567,7 +2567,7 @@ class QUICHE_EXPORT QuicConnection
   // Ends the traced packets of one write by its send's outcome. A write
   // whose result names no traced send system call, such as one a batch writer
   // only buffered, leaves its packets unfinished, so they record abandonment.
-  void FinishQuicTraceWrite(QuicTraceSend& send, const WriteResult& result);
+  void FinishQuicTraceWrite(quic_trace::PendingSend& send, const WriteResult& result);
 #endif
 
   // The ECN codepoint of the last packet to be sent to the writer, which

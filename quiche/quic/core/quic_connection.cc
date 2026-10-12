@@ -2565,15 +2565,15 @@ QuicConnection::QuicTraceApplicationScope::~QuicTraceApplicationScope() {
   }
 }
 
-void QuicConnection::FinishQuicTraceWrite(QuicTraceSend& send,
+void QuicConnection::FinishQuicTraceWrite(quic_trace::PendingSend& send,
                                           const WriteResult& result) {
   if (result.quic_trace_sent_ns == 0) {
     return;
   }
   if (result.status == WRITE_STATUS_OK) {
-    send.Sent(result.quic_trace_sent_ns);
+    send.sent(result.quic_trace_sent_ns);
   } else if (IsWriteError(result.status)) {
-    send.Dropped(result.quic_trace_sent_ns);
+    send.dropped(result.quic_trace_sent_ns);
   }
 }
 
@@ -3950,7 +3950,7 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
       }
 #if defined(QUICHE_MOQ_TRACE)
       // The packet now leaves inside the coalesced datagram.
-      quic_trace_coalesced_.Append(std::move(packet->quic_trace_send));
+      quic_trace_coalesced_.append(std::move(packet->quic_trace_send));
 #endif
       if (coalesced_packet_.length() < coalesced_packet_.max_packet_length()) {
         QUIC_DVLOG(1) << ENDPOINT << "Trying to set soft max packet length to "
@@ -5154,7 +5154,7 @@ void QuicConnection::SendConnectionClosePacket(
     if (version().IsIetfQuic()) {
       coalesced_packet_.Clear();
 #if defined(QUICHE_MOQ_TRACE)
-      quic_trace_coalesced_ = QuicTraceSend();
+      quic_trace_coalesced_ = quic_trace::PendingSend();
 #endif
     }
     ClearQueuedPackets();
@@ -5185,7 +5185,7 @@ void QuicConnection::SendConnectionClosePacket(
   if (version().IsIetfQuic()) {
     coalesced_packet_.Clear();
 #if defined(QUICHE_MOQ_TRACE)
-    quic_trace_coalesced_ = QuicTraceSend();
+    quic_trace_coalesced_ = quic_trace::PendingSend();
 #endif
   }
   ClearQueuedPackets();
@@ -6524,7 +6524,7 @@ bool QuicConnection::FlushCoalescedPacket() {
 #if defined(QUICHE_MOQ_TRACE)
   // The coalescer empties now, so its traced packets leave with this flush
   // or, when it sends nothing, end abandoned.
-  QuicTraceSend coalesced = std::move(quic_trace_coalesced_);
+  quic_trace::PendingSend coalesced = std::move(quic_trace_coalesced_);
 #endif
   if (!connected_) {
     return false;

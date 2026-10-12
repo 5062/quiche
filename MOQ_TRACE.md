@@ -58,9 +58,9 @@ own read. A packet that came from no traced read, such as one a test builds,
 gets no trace. Neither does a packet the dispatcher builds without a
 connection, such as its Initial ACK for buffered packets or a stateless
 connection close; its send still appears as a socket event. A TX packet waits
-in a `QuicTraceSend` holder that travels with its bytes through the coalescer
-and the write-blocked queue, and ends at the `WriteResult` of the send that
-carried it. A batch writer reports no traced
+in the toolkit's `quic_trace::PendingSend`, which travels with its bytes through
+the coalescer and the write-blocked queue, and ends at the `WriteResult` of the
+send that carried it. A batch writer reports no traced
 send for the packets it only buffered, so those record abandonment; the relay
 uses `QuicDefaultPacketWriter`, which sends each packet at once.
 

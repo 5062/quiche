@@ -305,7 +305,7 @@ WriteResult QuicLinuxSocketUtils::WritePacket(int fd, const QuicMsgHdr& hdr,
     trace_stats.datagrams = QuicTraceDatagrams(*hdr.hdr(), rc);
     trace_stats.bytes = rc;
   }
-  trace_socket.finish(QuicTraceSocketOutcome(write_error, enobufs_blocked),
+  trace_socket.finish(quic_trace::socket_outcome(write_error),
                       trace_stats);
   if (rc < 0) {
     errno = write_error;
@@ -358,7 +358,7 @@ WriteResult QuicLinuxSocketUtils::WriteMultiplePackets(int fd,
     }
     trace_stats.bytes = mhdr->num_bytes_sent(rc);
   }
-  trace_socket.finish(QuicTraceSocketOutcome(write_error), trace_stats);
+  trace_socket.finish(quic_trace::socket_outcome(write_error), trace_stats);
   if (rc <= 0) {
     errno = write_error;
   }

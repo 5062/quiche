@@ -332,7 +332,7 @@ void QuicUdpSocketApi::ReadPacket(
   const uint64_t read_ns = quic_trace::now_ns();
   if (bytes_read < 0) {
     const int read_error = errno;
-    trace_socket.finish_at(QuicTraceSocketOutcome(read_error), {}, read_ns);
+    trace_socket.finish_at(quic_trace::socket_outcome(read_error), {}, read_ns);
     errno = read_error;
   } else {
     result->quic_trace_read_ns = read_ns;
@@ -445,7 +445,7 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
     const uint64_t read_ns = quic_trace::now_ns();
     if (packets_read < 0) {
       const int read_error = errno;
-      trace_socket.finish_at(QuicTraceSocketOutcome(read_error), {}, read_ns);
+      trace_socket.finish_at(quic_trace::socket_outcome(read_error), {}, read_ns);
       errno = read_error;
     } else {
       quic_trace::SocketStats trace_stats;
@@ -644,7 +644,7 @@ WriteResult QuicUdpSocketApi::WritePacket(
     trace_stats.datagrams = 1;
     trace_stats.bytes = rc;
   }
-  trace_socket.finish_at(QuicTraceSocketOutcome(write_error), trace_stats,
+  trace_socket.finish_at(quic_trace::socket_outcome(write_error), trace_stats,
                          sent_ns);
   if (rc < 0) {
     errno = write_error;
