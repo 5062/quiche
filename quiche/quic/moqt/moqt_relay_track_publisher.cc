@@ -225,12 +225,17 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
         // listeners, but do not treat the placeholder status of an unfinished
         // object as track state.
 #if defined(QUICHE_MOQ_TRACE)
-        metadata.trace_stored_ns = quic_trace::now_ns();
+        // Listeners write their copies inside this loop, so it is timed as the
+        // fan-out minus that copy work.
+        moq_trace::FanOut fan_out;
 #endif
         for (MoqtObjectListener* listener : listeners_) {
           listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
                                          metadata.publisher_priority);
         }
+#if defined(QUICHE_MOQ_TRACE)
+        metadata.trace_fan_out = fan_out.end();
+#endif
         return;
       }
       // The object is now complete, so its status is meaningful. Update state
@@ -246,12 +251,17 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     // is a placeholder that the final fragment can still change, so track state
     // must not advance until the payload is complete.
 #if defined(QUICHE_MOQ_TRACE)
-    metadata.trace_stored_ns = quic_trace::now_ns();
+    // Listeners write their copies inside this loop, so it is timed as the
+    // fan-out minus that copy work.
+    moq_trace::FanOut fan_out;
 #endif
     for (MoqtObjectListener* listener : listeners_) {
       listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
                                      metadata.publisher_priority);
     }
+#if defined(QUICHE_MOQ_TRACE)
+    metadata.trace_fan_out = fan_out.end();
+#endif
     return;
   }
   // Object is valid. Update state.
@@ -272,7 +282,9 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       break;
   }
 #if defined(QUICHE_MOQ_TRACE)
-  metadata.trace_stored_ns = quic_trace::now_ns();
+  // Listeners write their copies inside this loop, so it is timed as the
+  // fan-out minus that copy work.
+  moq_trace::FanOut fan_out;
 #endif
   for (MoqtObjectListener* listener : listeners_) {
     listener->OnNewObjectAvailable(metadata.location, metadata.subgroup,
@@ -281,6 +293,9 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       listener->OnNewFinAvailable(metadata.location, *(metadata.subgroup));
     }
   }
+#if defined(QUICHE_MOQ_TRACE)
+  metadata.trace_fan_out = fan_out.end();
+#endif
 }
 
 void MoqtRelayTrackPublisher::OnPublishDone(FullTrackName full_track_name) {

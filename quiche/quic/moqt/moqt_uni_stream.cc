@@ -174,6 +174,12 @@ void OutgoingSubgroupStream::DeliveryTimeoutDelegate::OnAlarm() {
 
 void OutgoingSubgroupStream::SendObjects() {
 #if defined(QUICHE_MOQ_TRACE)
+  // The cache calls this listener inside its fan-out of a new object, so the
+  // copy's work here is excluded from that fan-out's notify phase.
+  moq_trace::CopyWork copy_work;
+  if (trace_object().has_value()) {
+    copy_work.begin(quic_trace::now_ns());
+  }
   // A blocked write ends once the stream accepts writes again. A listener can
   // call in while the stream is still blocked, and that does not end it.
   if (trace_blocked_since_ns_.has_value() && stream().CanWrite()) {
@@ -206,6 +212,19 @@ void OutgoingSubgroupStream::SendObjects() {
     }
     QUICHE_DCHECK_EQ(object->metadata.location.group, index_.group);
     QUICHE_DCHECK(object->metadata.subgroup == index_.subgroup);
+    if (!visitor->InWindow(object->metadata.location)) {
+#if defined(QUICHE_MOQ_TRACE)
+      // An object outside the window starts no copy. A copy already in
+      // progress had the window shrink under it, so the relay drops it.
+      FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_DROPPED);
+#endif
+      // It is possible that the next object became irrelevant due to a
+      // REQUEST_UPDATE.  Close the stream if so.
+      absl::Status status = webtransport::SendFinOnStream(stream());
+      QUICHE_BUG_IF(OutgoingSubgroupStream_fin_due_to_update, !status.ok())
+          << "Writing FIN failed despite CanWrite() being true.";
+      return;
+    }
 #if defined(QUICHE_MOQ_TRACE)
     if (already_delivered_ == 0 && object->metadata.trace_logical_id.has_value()) {
       moq_trace::ObjectContext context;
@@ -221,6 +240,7 @@ void OutgoingSubgroupStream::SendObjects() {
       context.start_ns = clone_start_ns;
       context.payload_bytes = object->metadata.payload_length;
       trace_object().emplace(context);
+      copy_work.begin(clone_start_ns);
       // The copy waited from the instant the cache made the object readable
       // until this clone. Listeners run synchronously, so the wait includes
       // delivering the object to subscribers notified before this one.
@@ -235,18 +255,6 @@ void OutgoingSubgroupStream::SendObjects() {
       clone.finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
     }
 #endif
-    if (!visitor->InWindow(object->metadata.location)) {
-#if defined(QUICHE_MOQ_TRACE)
-      // The subscription no longer wants this object, so the relay drops it.
-      FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_DROPPED);
-#endif
-      // It is possible that the next object became irrelevant due to a
-      // REQUEST_UPDATE.  Close the stream if so.
-      absl::Status status = webtransport::SendFinOnStream(stream());
-      QUICHE_BUG_IF(OutgoingSubgroupStream_fin_due_to_update, !status.ok())
-          << "Writing FIN failed despite CanWrite() being true.";
-      return;
-    }
 
     quic::QuicTimeDelta delivery_timeout = visitor->delivery_timeout();
     if (!visitor->alternate_delivery_timeout() &&
@@ -689,13 +697,17 @@ void IncomingDataStream::StartTraceObject(
 // handling of the fragment up to the cache. The cache's storing of the fragment
 // is Create for the first fragment and FrameCommit for each later one, so a
 // fragment never reports both. Storage ends where the relay cache starts
-// notifying listeners, because that fan-out is outbound work.
+// notifying listeners. That fan-out is Notify, minus the copies the listeners
+// write inside it, which belong to their outbound lifecycles.
 void IncomingDataStream::TraceFragmentStored(
     const PublishedObjectMetadata& metadata, uint64_t store_start_ns,
     bool first_fragment) {
-  const uint64_t stored_ns =
-      metadata.trace_stored_ns.has_value() ? *metadata.trace_stored_ns
-                                           : quic_trace::now_ns();
+  const std::optional<uint64_t> fan_out_start_ns =
+      metadata.trace_fan_out.has_value() ? metadata.trace_fan_out->start_ns()
+                                         : std::nullopt;
+  const uint64_t stored_ns = fan_out_start_ns.has_value()
+                                 ? *fan_out_start_ns
+                                 : quic_trace::now_ns();
   if (!trace_object_.has_value()) {
     trace_payload_start_ns_.reset();
     return;
@@ -711,6 +723,9 @@ void IncomingDataStream::TraceFragmentStored(
                      : MOQ_TRACE_OBJECT_PHASE_FRAME_COMMIT,
       store_start_ns);
   store.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, stored_ns);
+  if (metadata.trace_fan_out.has_value()) {
+    metadata.trace_fan_out->record(*trace_object_);
+  }
 }
 
 void IncomingDataStream::OnObjectPayloadConsumed(size_t,

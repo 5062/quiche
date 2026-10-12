@@ -31,9 +31,9 @@ MoQ object lifecycles, one event stream per logical object:
 | --- | --- |
 | `MoqtDataParser::ParseNextItemFromStream`, `kObjectId` | object start, header parse phase |
 | `IncomingDataStream::OnObjectMessage` | per fragment, a payload read phase followed by a create phase (first fragment) or a frame commit phase (each later fragment) |
-| `MoqtRelayTrackPublisher::OnObjectFragment` | the storage timestamp that ends the create or frame commit phase |
+| `MoqtRelayTrackPublisher::OnObjectFragment` | the listener fan-out, which ends the create or frame commit phase and is recorded as notify |
 | `IncomingDataStream::OnObjectPayloadConsumed` | object end, and payload read for a fragment that never reached the cache |
-| `OutgoingSubgroupStream::SendObjects` | clone phase, one TX object per subscriber copy |
+| `OutgoingSubgroupStream::SendObjects` | clone phase, one TX object per subscriber copy in the subscription's window, and the copy work that notify excludes |
 | `OutgoingUniStream::WriteObjectToStream` | header encode phase, payload write phase |
 
 Transport lifecycles, taken from the shared QUIC core rather than from MoQ aware
@@ -80,8 +80,10 @@ of the phases that describe other layers:
 
 - RX object phases are sequential per fragment. Payload read ends where the
   fragment enters the relay cache, and create or frame commit ends where the
-  cache starts notifying listeners. Listener fan-out is outbound work and falls
-  in no inbound phase.
+  cache starts notifying listeners. The listener loop is the notify phase,
+  minus each copy's work from the start of its lifecycle until
+  `SendObjects` returns, which belongs to that copy. `moq_trace::FanOut` and
+  `moq_trace::CopyWork` from the toolkit's C++ facade record it.
 - Each application callback made while an inbound packet is being processed
   runs inside `QuicConnection::MoqTraceApplicationScope` and is recorded as the
   RX `application` packet phase. The scopes sit in the `WebTransportStreamAdapter`

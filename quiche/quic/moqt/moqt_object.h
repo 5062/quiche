@@ -41,10 +41,10 @@ struct PublishedObjectMetadata {
   // The relay cache assigns this sidecar identity through its const visitor
   // interface when it accepts the first fragment.
   mutable std::optional<moq_trace::LogicalId> trace_logical_id;
-  // The relay cache records when it finished storing a fragment, before it
-  // notifies listeners. Listener fan-out runs synchronously inside the same
-  // call, and this timestamp keeps that work out of the inbound object phases.
-  mutable std::optional<uint64_t> trace_stored_ns;
+  // The relay cache's fan-out of a fragment to its listeners, which starts
+  // when it finished storing the fragment. Listeners write their copies
+  // synchronously inside the fan-out, and the spans exclude that work.
+  mutable std::optional<moq_trace::FanOutSpans> trace_fan_out;
   // When the relay cache first made the object readable, on the trace clock.
   // Each outbound copy's delivery wait runs from here until its clone starts.
   mutable std::optional<uint64_t> trace_ready_ns;
