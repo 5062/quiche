@@ -117,7 +117,7 @@ of the phases that describe other layers:
 ## Build integration
 
 The hooks compile behind `QUICHE_MOQ_TRACE` and need the C++ facade headers and
-the two provider archives from `moq-trace2`. Bazel cannot depend on a path outside
+the two provider archives from `moq-trace`. Bazel cannot depend on a path outside
 the execution root, so they arrive through `--cxxopt`, `--linkopt`, and
 `CPLUS_INCLUDE_PATH`:
 
@@ -132,7 +132,7 @@ Run the scripts from an environment that supplies Clang, Bazelisk or Bazel, ICU,
 and the `moq_trace` pkg-config package. The experiment command additionally
 needs `moq-trace`, `moq-bench`, LTTng, Babeltrace 2, and OpenSSL. The scripts
 never enter or select a development shell or depend on the location of a
-`moq-trace2` checkout.
+`moq-trace` checkout.
 
 Options are collected wherever they appear and the first argument that names a
 directory is the worktree, so `moq_trace/test.sh . --jobs=8` tests this checkout
