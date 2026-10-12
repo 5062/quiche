@@ -73,6 +73,13 @@ void LogCoalesceStreamFrameStatus(bool success) {
 // number.
 quic_trace::Packet StartTxPacketTrace(uint64_t connection_id,
                                       const SerializedPacket& packet) {
+  // Only a QuicConnection's creator has a trace connection ID. The dispatcher's
+  // creators build an Initial ACK for buffered packets and stateless
+  // connection closes, which belong to no connection and are written outside
+  // the connection's traced send path, so they get no packet lifecycle.
+  if (connection_id == 0) {
+    return quic_trace::Packet();
+  }
   quic_trace::PacketContext context;
   context.connection_id = connection_id;
   context.direction = QUIC_TRACE_DIRECTION_TX;
