@@ -26,6 +26,12 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "quiche/common/platform/api/quiche_bug_tracker.h"
+#include "quiche/common/platform/api/quiche_flag_utils.h"
+#include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/platform/api/quiche_testvalue.h"
+#include "quiche/common/quiche_mem_slice.h"
+#include "quiche/common/quiche_text_utils.h"
 #include "quiche/quic/core/congestion_control/rtt_stats.h"
 #include "quiche/quic/core/congestion_control/send_algorithm_interface.h"
 #include "quiche/quic/core/congestion_control/uber_loss_algorithm.h"
@@ -62,7 +68,6 @@
 #include "quiche/quic/core/frames/quic_stream_frame.h"
 #include "quiche/quic/core/frames/quic_streams_blocked_frame.h"
 #include "quiche/quic/core/frames/quic_window_update_frame.h"
-#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/core/quic_alarm_factory.h"
 #include "quiche/quic/core/quic_bandwidth.h"
 #include "quiche/quic/core/quic_coalesced_packet.h"
@@ -83,6 +88,7 @@
 #include "quiche/quic/core/quic_sent_packet_manager.h"
 #include "quiche/quic/core/quic_tag.h"
 #include "quiche/quic/core/quic_time.h"
+#include "quiche/quic/core/quic_trace_utils.h"
 #include "quiche/quic/core/quic_transmission_info.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/core/quic_utils.h"
@@ -97,12 +103,6 @@
 #include "quiche/quic/platform/api/quic_ip_address.h"
 #include "quiche/quic/platform/api/quic_logging.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
-#include "quiche/common/platform/api/quiche_bug_tracker.h"
-#include "quiche/common/platform/api/quiche_flag_utils.h"
-#include "quiche/common/platform/api/quiche_logging.h"
-#include "quiche/common/platform/api/quiche_testvalue.h"
-#include "quiche/common/quiche_mem_slice.h"
-#include "quiche/common/quiche_text_utils.h"
 
 namespace quic {
 
@@ -236,7 +236,7 @@ QuicConnection::QuicConnection(
       received_client_addresses_cache_(kMaxReceivedClientAddressSize),
       perspective_(perspective),
 #if defined(QUICHE_MOQ_TRACE)
-      moq_trace_connection_id_(quic_trace::next_connection_id()),
+      quic_trace_connection_id_(quic_trace::next_connection_id()),
 #endif
       owns_writer_(owns_writer),
       can_truncate_connection_ids_(perspective == Perspective::IS_SERVER),
@@ -255,7 +255,7 @@ QuicConnection::QuicConnection(
       << server_connection_id << " which is invalid with version " << version();
   framer_.set_visitor(this);
 #if defined(QUICHE_MOQ_TRACE)
-  packet_creator_.set_moq_trace_connection_id(moq_trace_connection_id_);
+  packet_creator_.set_quic_trace_connection_id(quic_trace_connection_id_);
 #endif
   stats_.connection_creation_time = clock_->ApproximateNow();
   // TODO(ianswett): Supply the NetworkChangeVisitor as a constructor argument
@@ -829,10 +829,9 @@ QuicBandwidth QuicConnection::ApplicationDrivenPacingRate() const {
 
 void QuicConnection::OnError(QuicFramer* framer) {
 #if defined(QUICHE_MOQ_TRACE)
-  FinishMoqTracePacket(
-      framer->error() == QUIC_DECRYPTION_FAILURE
-          ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
-          : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
+  FinishQuicTracePacket(framer->error() == QUIC_DECRYPTION_FAILURE
+                            ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
+                            : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
 #endif
   // Packets that we can not or have not decrypted are dropped.
   // TODO(rch): add stats to measure this.
@@ -845,7 +844,7 @@ void QuicConnection::OnError(QuicFramer* framer) {
 
 bool QuicConnection::ProcessPacket(const QuicEncryptedPacket& packet) {
 #if defined(QUICHE_MOQ_TRACE)
-  moq_trace_rx_packet_length_ = packet.length();
+  quic_trace_rx_packet_length_ = packet.length();
 #endif
   const bool processed = framer_.ProcessPacket(packet);
 #if defined(QUICHE_MOQ_TRACE)
@@ -856,10 +855,10 @@ bool QuicConnection::ProcessPacket(const QuicEncryptedPacket& packet) {
     outcome = framer_.error() == QUIC_DECRYPTION_FAILURE
                   ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
                   : QUIC_TRACE_PACKET_OUTCOME_MALFORMED;
-  } else if (moq_trace_rx_control_packet_) {
+  } else if (quic_trace_rx_control_packet_) {
     outcome = QUIC_TRACE_PACKET_OUTCOME_SUCCESS;
   }
-  FinishMoqTracePacket(outcome);
+  FinishQuicTracePacket(outcome);
 #endif
   return processed;
 }
@@ -867,27 +866,27 @@ bool QuicConnection::ProcessPacket(const QuicEncryptedPacket& packet) {
 void QuicConnection::OnPacket() {
   last_received_packet_info_.decrypted = false;
 #if defined(QUICHE_MOQ_TRACE)
-  FinishMoqTracePacket(QUIC_TRACE_PACKET_OUTCOME_ABANDONED);
-  moq_trace_rx_control_packet_ = false;
+  FinishQuicTracePacket(QUIC_TRACE_PACKET_OUTCOME_ABANDONED);
+  quic_trace_rx_control_packet_ = false;
   // A packet's lifecycle starts when the read that returned its datagram
   // completed. A packet that came from no traced read, such as one a test
   // builds, cannot start there, so it gets no trace rather than a later start.
-  const uint64_t read_ns = last_received_packet_info_.moq_trace_read_ns;
+  const uint64_t read_ns = last_received_packet_info_.quic_trace_read_ns;
   if (read_ns == 0) {
     return;
   }
   quic_trace::PacketContext context;
-  context.connection_id = moq_trace_connection_id_;
+  context.connection_id = quic_trace_connection_id_;
   context.direction = QUIC_TRACE_DIRECTION_RX;
   context.start_ns = read_ns;
-  moq_trace_rx_packet_.emplace(context);
-  moq_trace_rx_packet_->set_byte_len(moq_trace_rx_packet_length_);
+  quic_trace_rx_packet_.emplace(context);
+  quic_trace_rx_packet_->set_byte_len(quic_trace_rx_packet_length_);
   // The wait behind earlier packets of the same read, and for a replayed
   // packet the wait for its keys, ends as this packet's processing begins.
-  moq_trace_rx_packet_->phase_at(QUIC_TRACE_PACKET_PHASE_READ_QUEUE, read_ns)
+  quic_trace_rx_packet_->phase_at(QUIC_TRACE_PACKET_PHASE_READ_QUEUE, read_ns)
       .finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-  moq_trace_rx_header_parse_.emplace(
-      moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_HEADER_PARSE));
+  quic_trace_rx_header_parse_.emplace(
+      quic_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_HEADER_PARSE));
 #endif
 }
 
@@ -947,7 +946,7 @@ void QuicConnection::OnVersionNegotiationPacket(
 
   server_supported_versions_ = packet.versions;
 #if defined(QUICHE_MOQ_TRACE)
-  moq_trace_rx_control_packet_ = true;
+  quic_trace_rx_control_packet_ = true;
 #endif
   CloseConnection(
       QUIC_INVALID_VERSION,
@@ -988,7 +987,7 @@ void QuicConnection::OnRetryPacket(QuicConnectionId original_connection_id,
   framer_.set_drop_incoming_retry_packets(true);
   stats_.retry_packet_processed = true;
 #if defined(QUICHE_MOQ_TRACE)
-  moq_trace_rx_control_packet_ = true;
+  quic_trace_rx_control_packet_ = true;
 #endif
   QUIC_DLOG(INFO) << "Received RETRY, replacing connection ID "
                   << default_path_.server_connection_id << " with "
@@ -1091,19 +1090,19 @@ bool QuicConnection::ValidateServerConnectionId(
 bool QuicConnection::OnUnauthenticatedPublicHeader(
     const QuicPacketHeader& header) {
 #if defined(QUICHE_MOQ_TRACE)
-  if (moq_trace_rx_packet_.has_value()) {
-    std::optional<quic_trace_packet_space> space = MoqTracePacketSpace(header);
+  if (quic_trace_rx_packet_.has_value()) {
+    std::optional<quic_trace_packet_space> space = QuicTracePacketSpace(header);
     if (space.has_value()) {
-      moq_trace_rx_packet_->set_space(*space);
+      quic_trace_rx_packet_->set_space(*space);
     }
   }
-  if (moq_trace_rx_header_parse_.has_value()) {
-    moq_trace_rx_header_parse_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-    moq_trace_rx_header_parse_.reset();
+  if (quic_trace_rx_header_parse_.has_value()) {
+    quic_trace_rx_header_parse_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    quic_trace_rx_header_parse_.reset();
   }
-  if (moq_trace_rx_packet_.has_value()) {
-    moq_trace_rx_header_unprotect_.emplace(moq_trace_rx_packet_->phase(
-        QUIC_TRACE_PACKET_PHASE_HEADER_UNPROTECT));
+  if (quic_trace_rx_packet_.has_value()) {
+    quic_trace_rx_header_unprotect_.emplace(
+        quic_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_HEADER_UNPROTECT));
   }
 #endif
   if (store_one_dcid_) {
@@ -1195,13 +1194,13 @@ bool QuicConnection::OnUnauthenticatedPublicHeader(
 
 bool QuicConnection::OnUnauthenticatedHeader(const QuicPacketHeader& header) {
 #if defined(QUICHE_MOQ_TRACE)
-  if (moq_trace_rx_header_unprotect_.has_value()) {
-    moq_trace_rx_header_unprotect_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-    moq_trace_rx_header_unprotect_.reset();
+  if (quic_trace_rx_header_unprotect_.has_value()) {
+    quic_trace_rx_header_unprotect_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    quic_trace_rx_header_unprotect_.reset();
   }
-  if (moq_trace_rx_packet_.has_value()) {
-    moq_trace_rx_payload_decrypt_.emplace(
-        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_PAYLOAD_DECRYPT));
+  if (quic_trace_rx_packet_.has_value()) {
+    quic_trace_rx_payload_decrypt_.emplace(
+        quic_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_PAYLOAD_DECRYPT));
   }
 #endif
   if (debug_visitor_ != nullptr) {
@@ -1310,9 +1309,9 @@ void QuicConnection::OnUserAgentIdKnown(const std::string& /*user_agent_id*/) {
 void QuicConnection::OnDecryptedPacket(size_t /*length*/,
                                        EncryptionLevel level) {
 #if defined(QUICHE_MOQ_TRACE)
-  if (moq_trace_rx_payload_decrypt_.has_value()) {
-    moq_trace_rx_payload_decrypt_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-    moq_trace_rx_payload_decrypt_.reset();
+  if (quic_trace_rx_payload_decrypt_.has_value()) {
+    quic_trace_rx_payload_decrypt_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    quic_trace_rx_payload_decrypt_.reset();
   }
 #endif
   last_received_packet_info_.decrypted_level = level;
@@ -1349,10 +1348,10 @@ void QuicConnection::OnDecryptedPacket(size_t /*length*/,
 }
 
 #if defined(QUICHE_MOQ_TRACE)
-void QuicConnection::OnMoqTracePacketLength(size_t length) {
-  moq_trace_rx_packet_length_ = length;
-  if (moq_trace_rx_packet_.has_value()) {
-    moq_trace_rx_packet_->set_byte_len(length);
+void QuicConnection::OnQuicTracePacketLength(size_t length) {
+  quic_trace_rx_packet_length_ = length;
+  if (quic_trace_rx_packet_.has_value()) {
+    quic_trace_rx_packet_->set_byte_len(length);
   }
 }
 #endif
@@ -1366,9 +1365,9 @@ QuicSocketAddress QuicConnection::GetEffectivePeerAddressFromCurrentPacket()
 
 bool QuicConnection::OnPacketHeader(const QuicPacketHeader& header) {
 #if defined(QUICHE_MOQ_TRACE)
-  if (moq_trace_rx_packet_.has_value() &&
+  if (quic_trace_rx_packet_.has_value() &&
       header.packet_number.IsInitialized()) {
-    moq_trace_rx_packet_->set_number(header.packet_number.ToUint64());
+    quic_trace_rx_packet_->set_number(header.packet_number.ToUint64());
   }
 #endif
   if (spin_bit_enabled_ && header.form == IETF_QUIC_SHORT_HEADER_PACKET) {
@@ -1631,11 +1630,11 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
   // all frames.
   MaybeUpdateAckTimeout();
 #if defined(QUICHE_MOQ_TRACE)
-  if (moq_trace_rx_packet_.has_value()) {
-    moq_trace_rx_frame_process_.emplace(
-        moq_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
+  if (quic_trace_rx_packet_.has_value()) {
+    quic_trace_rx_frame_process_.emplace(
+        quic_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
   }
-  moq_trace_stream_frame_accepted_ns_.reset();
+  quic_trace_stream_frame_accepted_ns_.reset();
 #endif
   visitor_->OnStreamFrame(frame);
 #if defined(QUICHE_MOQ_TRACE)
@@ -1643,26 +1642,26 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
       connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
                  : QUIC_TRACE_PACKET_OUTCOME_DROPPED;
   // Application delivery may already have ended the phase.
-  if (moq_trace_rx_frame_process_.has_value()) {
-    moq_trace_rx_frame_process_->finish(trace_outcome);
-    moq_trace_rx_frame_process_.reset();
+  if (quic_trace_rx_frame_process_.has_value()) {
+    quic_trace_rx_frame_process_->finish(trace_outcome);
+    quic_trace_rx_frame_process_.reset();
   }
-  if (moq_trace_rx_packet_.has_value() && frame.data_length != 0) {
+  if (quic_trace_rx_packet_.has_value() && frame.data_length != 0) {
     // The frame's timestamp is when the stream's receive buffer accepted its
     // bytes, which the sequencer reported before any application callback. A
     // frame the session or stream discarded was never accepted.
-    if (moq_trace_stream_frame_accepted_ns_.has_value()) {
-      moq_trace_rx_packet_->stream_frame_at(
+    if (quic_trace_stream_frame_accepted_ns_.has_value()) {
+      quic_trace_rx_packet_->stream_frame_at(
           frame.stream_id, frame.offset, frame.offset + frame.data_length,
           QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
-          *moq_trace_stream_frame_accepted_ns_);
+          *quic_trace_stream_frame_accepted_ns_);
     } else {
-      moq_trace_rx_packet_->stream_frame(
-          frame.stream_id, frame.offset, frame.offset + frame.data_length,
-          QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+      quic_trace_rx_packet_->stream_frame(frame.stream_id, frame.offset,
+                                          frame.offset + frame.data_length,
+                                          QUIC_TRACE_PACKET_OUTCOME_DROPPED);
     }
   }
-  moq_trace_stream_frame_accepted_ns_.reset();
+  quic_trace_stream_frame_accepted_ns_.reset();
 #endif
   stats_.stream_bytes_received += frame.data_length;
   ping_manager_.reset_consecutive_retransmittable_on_wire_count();
@@ -2498,8 +2497,8 @@ bool QuicConnection::OnBlockedFrame(const QuicBlockedFrame& frame) {
 
 void QuicConnection::OnPacketComplete() {
 #if defined(QUICHE_MOQ_TRACE)
-  FinishMoqTracePacket(connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
-                                  : QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+  FinishQuicTracePacket(connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
+                                   : QUIC_TRACE_PACKET_OUTCOME_DROPPED);
 #endif
   // Don't do anything if this packet closed the connection.
   if (!connected_) {
@@ -2537,71 +2536,71 @@ void QuicConnection::OnPacketComplete() {
 }
 
 #if defined(QUICHE_MOQ_TRACE)
-QuicConnection::MoqTraceApplicationScope::MoqTraceApplicationScope(
+QuicConnection::QuicTraceApplicationScope::QuicTraceApplicationScope(
     QuicConnection* connection)
     : connection_(connection) {
-  if (connection_->moq_trace_application_depth_++ > 0) {
+  if (connection_->quic_trace_application_depth_++ > 0) {
     return;
   }
-  if (connection_->moq_trace_rx_frame_process_.has_value()) {
-    connection_->moq_trace_rx_frame_process_->finish(
+  if (connection_->quic_trace_rx_frame_process_.has_value()) {
+    connection_->quic_trace_rx_frame_process_->finish(
         QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-    connection_->moq_trace_rx_frame_process_.reset();
+    connection_->quic_trace_rx_frame_process_.reset();
   }
-  if (connection_->moq_trace_rx_packet_.has_value()) {
-    connection_->moq_trace_rx_application_.emplace(
-        connection_->moq_trace_rx_packet_->phase(
+  if (connection_->quic_trace_rx_packet_.has_value()) {
+    connection_->quic_trace_rx_application_.emplace(
+        connection_->quic_trace_rx_packet_->phase(
             QUIC_TRACE_PACKET_PHASE_APPLICATION));
   }
 }
 
-QuicConnection::MoqTraceApplicationScope::~MoqTraceApplicationScope() {
-  if (--connection_->moq_trace_application_depth_ > 0) {
+QuicConnection::QuicTraceApplicationScope::~QuicTraceApplicationScope() {
+  if (--connection_->quic_trace_application_depth_ > 0) {
     return;
   }
-  if (connection_->moq_trace_rx_application_.has_value()) {
-    connection_->moq_trace_rx_application_->finish(
+  if (connection_->quic_trace_rx_application_.has_value()) {
+    connection_->quic_trace_rx_application_->finish(
         QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-    connection_->moq_trace_rx_application_.reset();
+    connection_->quic_trace_rx_application_.reset();
   }
 }
 
-void QuicConnection::FinishMoqTraceWrite(MoqTraceSend& send,
-                                         const WriteResult& result) {
-  if (result.moq_trace_sent_ns == 0) {
+void QuicConnection::FinishQuicTraceWrite(QuicTraceSend& send,
+                                          const WriteResult& result) {
+  if (result.quic_trace_sent_ns == 0) {
     return;
   }
   if (result.status == WRITE_STATUS_OK) {
-    send.Sent(result.moq_trace_sent_ns);
+    send.Sent(result.quic_trace_sent_ns);
   } else if (IsWriteError(result.status)) {
-    send.Dropped(result.moq_trace_sent_ns);
+    send.Dropped(result.quic_trace_sent_ns);
   }
 }
 
-void QuicConnection::FinishMoqTracePacket(quic_trace_packet_outcome outcome) {
-  if (moq_trace_rx_application_.has_value()) {
-    moq_trace_rx_application_->finish(outcome);
-    moq_trace_rx_application_.reset();
+void QuicConnection::FinishQuicTracePacket(quic_trace_packet_outcome outcome) {
+  if (quic_trace_rx_application_.has_value()) {
+    quic_trace_rx_application_->finish(outcome);
+    quic_trace_rx_application_.reset();
   }
-  if (moq_trace_rx_frame_process_.has_value()) {
-    moq_trace_rx_frame_process_->finish(outcome);
-    moq_trace_rx_frame_process_.reset();
+  if (quic_trace_rx_frame_process_.has_value()) {
+    quic_trace_rx_frame_process_->finish(outcome);
+    quic_trace_rx_frame_process_.reset();
   }
-  if (moq_trace_rx_header_parse_.has_value()) {
-    moq_trace_rx_header_parse_->finish(outcome);
-    moq_trace_rx_header_parse_.reset();
+  if (quic_trace_rx_header_parse_.has_value()) {
+    quic_trace_rx_header_parse_->finish(outcome);
+    quic_trace_rx_header_parse_.reset();
   }
-  if (moq_trace_rx_header_unprotect_.has_value()) {
-    moq_trace_rx_header_unprotect_->finish(outcome);
-    moq_trace_rx_header_unprotect_.reset();
+  if (quic_trace_rx_header_unprotect_.has_value()) {
+    quic_trace_rx_header_unprotect_->finish(outcome);
+    quic_trace_rx_header_unprotect_.reset();
   }
-  if (moq_trace_rx_payload_decrypt_.has_value()) {
-    moq_trace_rx_payload_decrypt_->finish(outcome);
-    moq_trace_rx_payload_decrypt_.reset();
+  if (quic_trace_rx_payload_decrypt_.has_value()) {
+    quic_trace_rx_payload_decrypt_->finish(outcome);
+    quic_trace_rx_payload_decrypt_.reset();
   }
-  if (moq_trace_rx_packet_.has_value()) {
-    moq_trace_rx_packet_->finish(outcome);
-    moq_trace_rx_packet_.reset();
+  if (quic_trace_rx_packet_.has_value()) {
+    quic_trace_rx_packet_->finish(outcome);
+    quic_trace_rx_packet_.reset();
   }
 }
 #endif
@@ -2634,7 +2633,7 @@ bool QuicConnection::IsValidStatelessResetToken(
 
 void QuicConnection::OnAuthenticatedIetfStatelessResetPacket() {
 #if defined(QUICHE_MOQ_TRACE)
-  moq_trace_rx_control_packet_ = true;
+  quic_trace_rx_control_packet_ = true;
 #endif
   // TODO(fayang): Add OnAuthenticatedIetfStatelessResetPacket to
   // debug_visitor_.
@@ -3085,10 +3084,10 @@ void QuicConnection::ProcessUdpPacket(const QuicSocketAddress& self_address,
       self_address, peer_address, packet.receipt_time(), packet.length(),
       packet.ecn_codepoint(), packet.ipv6_flow_label());
 #if defined(QUICHE_MOQ_TRACE)
-  last_received_packet_info_.moq_trace_read_ns = packet.moq_trace_read_ns();
-  if (last_received_packet_info_.moq_trace_read_ns == 0 &&
-      moq_trace_stamp_unread_packets_) {
-    last_received_packet_info_.moq_trace_read_ns = quic_trace::now_ns();
+  last_received_packet_info_.quic_trace_read_ns = packet.quic_trace_read_ns();
+  if (last_received_packet_info_.quic_trace_read_ns == 0 &&
+      quic_trace_stamp_unread_packets_) {
+    last_received_packet_info_.quic_trace_read_ns = quic_trace::now_ns();
   }
 #endif
   current_packet_data_ = packet.data();
@@ -3535,7 +3534,7 @@ void QuicConnection::WriteQueuedPackets() {
       mtu_discoverer_.Disable();
       mtu_discovery_alarm().Cancel();
 #if defined(QUICHE_MOQ_TRACE)
-      FinishMoqTraceWrite(packet.moq_trace_send, result);
+      FinishQuicTraceWrite(packet.quic_trace_send, result);
 #endif
       buffered_packets_.pop_front();
       continue;
@@ -3546,7 +3545,7 @@ void QuicConnection::WriteQueuedPackets() {
         result.status = WRITE_STATUS_BLOCKED;
       } else {
 #if defined(QUICHE_MOQ_TRACE)
-        FinishMoqTraceWrite(packet.moq_trace_send, result);
+        FinishQuicTraceWrite(packet.quic_trace_send, result);
 #endif
         OnWriteError(result.error_code);
         break;
@@ -3554,7 +3553,7 @@ void QuicConnection::WriteQueuedPackets() {
     }
 #if defined(QUICHE_MOQ_TRACE)
     // A mitigated error is retried as a blocked write, so it ends nothing.
-    FinishMoqTraceWrite(packet.moq_trace_send, result);
+    FinishQuicTraceWrite(packet.quic_trace_send, result);
 #endif
     if (result.status == WRITE_STATUS_OK ||
         result.status == WRITE_STATUS_BLOCKED_DATA_BUFFERED) {
@@ -3674,27 +3673,27 @@ void QuicConnection::MaybeBundleOpportunistically(
 
 bool QuicConnection::CanWrite(HasRetransmittableData retransmittable) {
 #if defined(QUICHE_MOQ_TRACE)
-  moq_trace_blocked_now_.reset();
+  quic_trace_blocked_now_.reset();
   const bool can_write = CanWriteData(retransmittable);
   // Only data waits on these checks; acknowledgments bypass them.
   if (retransmittable == HAS_RETRANSMITTABLE_DATA) {
-    MoqTraceUpdateSendBlocked();
+    QuicTraceUpdateSendBlocked();
   }
   return can_write;
 }
 
-void QuicConnection::MoqTraceUpdateSendBlocked() {
+void QuicConnection::QuicTraceUpdateSendBlocked() {
   for (auto [reason, interval] :
        {std::pair{QUIC_TRACE_SEND_BLOCKED_REASON_CONGESTION_WINDOW,
-                  &moq_trace_blocked_congestion_window_},
+                  &quic_trace_blocked_congestion_window_},
         std::pair{QUIC_TRACE_SEND_BLOCKED_REASON_PACING,
-                  &moq_trace_blocked_pacing_},
+                  &quic_trace_blocked_pacing_},
         std::pair{QUIC_TRACE_SEND_BLOCKED_REASON_AMPLIFICATION,
-                  &moq_trace_blocked_amplification_}}) {
-    if (moq_trace_blocked_now_ != reason) {
+                  &quic_trace_blocked_amplification_}}) {
+    if (quic_trace_blocked_now_ != reason) {
       interval->finish();
     } else if (!interval->active()) {
-      *interval = quic_trace::SendBlocked(moq_trace_connection_id_, reason);
+      *interval = quic_trace::SendBlocked(quic_trace_connection_id_, reason);
     }
   }
 }
@@ -3747,7 +3746,7 @@ bool QuicConnection::CanWriteData(HasRetransmittableData retransmittable) {
                   << default_path_.bytes_sent_before_address_validation;
     ++stats_.num_amplification_throttling;
 #if defined(QUICHE_MOQ_TRACE)
-    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_AMPLIFICATION;
+    quic_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_AMPLIFICATION;
 #endif
     return false;
   }
@@ -3764,7 +3763,7 @@ bool QuicConnection::CanWriteData(HasRetransmittableData retransmittable) {
   if (send_alarm().IsSet()) {
 #if defined(QUICHE_MOQ_TRACE)
     // Only the pacing delay below sets the send alarm.
-    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_PACING;
+    quic_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_PACING;
 #endif
     return false;
   }
@@ -3774,7 +3773,7 @@ bool QuicConnection::CanWriteData(HasRetransmittableData retransmittable) {
   if (delay.IsInfinite()) {
 #if defined(QUICHE_MOQ_TRACE)
     // An infinite delay means the congestion window is full.
-    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_CONGESTION_WINDOW;
+    quic_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_CONGESTION_WINDOW;
 #endif
     send_alarm().Cancel();
     return false;
@@ -3788,7 +3787,7 @@ bool QuicConnection::CanWriteData(HasRetransmittableData retransmittable) {
     }
     // Cannot send packet now because delay is too far in the future.
 #if defined(QUICHE_MOQ_TRACE)
-    moq_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_PACING;
+    quic_trace_blocked_now_ = QUIC_TRACE_SEND_BLOCKED_REASON_PACING;
 #endif
     send_alarm().Update(now + delay, kAlarmGranularity);
     QUIC_DVLOG(1) << ENDPOINT << "Delaying sending " << delay.ToMilliseconds()
@@ -3951,7 +3950,7 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
       }
 #if defined(QUICHE_MOQ_TRACE)
       // The packet now leaves inside the coalesced datagram.
-      moq_trace_coalesced_.Append(std::move(packet->moq_trace_send));
+      quic_trace_coalesced_.Append(std::move(packet->quic_trace_send));
 #endif
       if (coalesced_packet_.length() < coalesced_packet_.max_packet_length()) {
         QUIC_DVLOG(1) << ENDPOINT << "Trying to set soft max packet length to "
@@ -3970,8 +3969,8 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
                                      send_to_address, last_ecn_codepoint_sent_,
                                      last_flow_label_sent_);
 #if defined(QUICHE_MOQ_TRACE)
-      buffered_packets_.back().moq_trace_send =
-          std::move(packet->moq_trace_send);
+      buffered_packets_.back().quic_trace_send =
+          std::move(packet->quic_trace_send);
 #endif
       break;
     case SEND_TO_WRITER:
@@ -4032,14 +4031,14 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
                                      last_flow_label_sent_);
 #if defined(QUICHE_MOQ_TRACE)
       // The send would block, so the packet waits with its bytes.
-      buffered_packets_.back().moq_trace_send =
-          std::move(packet->moq_trace_send);
+      buffered_packets_.back().quic_trace_send =
+          std::move(packet->quic_trace_send);
 #endif
     }
   }
 #if defined(QUICHE_MOQ_TRACE)
   if (fate == SEND_TO_WRITER) {
-    FinishMoqTraceWrite(packet->moq_trace_send, result);
+    FinishQuicTraceWrite(packet->quic_trace_send, result);
   }
 #endif
 
@@ -4691,14 +4690,14 @@ WriteResult QuicConnection::SendPacketToWriter(
   // before its first send and again whenever the addresses change, which is
   // what analysis needs to join the connection's packets to a capture.
   const QuicSocketAddress self(self_address, default_path_.self_address.port());
-  if (!moq_trace_path_.has_value() || moq_trace_path_->first != self ||
-      moq_trace_path_->second != destination_address) {
-    moq_trace_path_.emplace(self, destination_address);
+  if (!quic_trace_path_.has_value() || quic_trace_path_->first != self ||
+      quic_trace_path_->second != destination_address) {
+    quic_trace_path_.emplace(self, destination_address);
     quic_trace::connection_path(
-        moq_trace_connection_id_,
-        MoqTracePathEndpoint(self_address, self.port()),
-        MoqTracePathEndpoint(destination_address.host(),
-                             destination_address.port()));
+        quic_trace_connection_id_,
+        QuicTracePathEndpoint(self_address, self.port()),
+        QuicTracePathEndpoint(destination_address.host(),
+                              destination_address.port()));
   }
 #endif
   WriteResult result =
@@ -5155,7 +5154,7 @@ void QuicConnection::SendConnectionClosePacket(
     if (version().IsIetfQuic()) {
       coalesced_packet_.Clear();
 #if defined(QUICHE_MOQ_TRACE)
-      moq_trace_coalesced_ = MoqTraceSend();
+      quic_trace_coalesced_ = QuicTraceSend();
 #endif
     }
     ClearQueuedPackets();
@@ -5186,7 +5185,7 @@ void QuicConnection::SendConnectionClosePacket(
   if (version().IsIetfQuic()) {
     coalesced_packet_.Clear();
 #if defined(QUICHE_MOQ_TRACE)
-    moq_trace_coalesced_ = MoqTraceSend();
+    quic_trace_coalesced_ = QuicTraceSend();
 #endif
   }
   ClearQueuedPackets();
@@ -5709,7 +5708,7 @@ bool QuicConnection::WritePacketUsingWriter(
       peer_address, writer, GetEcnCodepointToSend(peer_address),
       outgoing_flow_label());
 #if defined(QUICHE_MOQ_TRACE)
-  FinishMoqTraceWrite(packet->moq_trace_send, result);
+  FinishQuicTraceWrite(packet->quic_trace_send, result);
 #endif
 
   const uint32_t writer_batch_id = result.batch_id;
@@ -6525,7 +6524,7 @@ bool QuicConnection::FlushCoalescedPacket() {
 #if defined(QUICHE_MOQ_TRACE)
   // The coalescer empties now, so its traced packets leave with this flush
   // or, when it sends nothing, end abandoned.
-  MoqTraceSend coalesced = std::move(moq_trace_coalesced_);
+  QuicTraceSend coalesced = std::move(quic_trace_coalesced_);
 #endif
   if (!connected_) {
     return false;
@@ -6577,7 +6576,7 @@ bool QuicConnection::FlushCoalescedPacket() {
         coalesced_packet_.self_address(), coalesced_packet_.peer_address(),
         coalesced_packet_.ecn_codepoint(), coalesced_packet_.flow_label());
 #if defined(QUICHE_MOQ_TRACE)
-    buffered_packets_.back().moq_trace_send = std::move(coalesced);
+    buffered_packets_.back().quic_trace_send = std::move(coalesced);
 #endif
   } else {
     WriteResult result = SendPacketToWriter(
@@ -6590,7 +6589,7 @@ bool QuicConnection::FlushCoalescedPacket() {
         result.status = WRITE_STATUS_BLOCKED;
       } else {
 #if defined(QUICHE_MOQ_TRACE)
-        FinishMoqTraceWrite(coalesced, result);
+        FinishQuicTraceWrite(coalesced, result);
 #endif
         OnWriteError(result.error_code);
         return false;
@@ -6598,7 +6597,7 @@ bool QuicConnection::FlushCoalescedPacket() {
     }
 #if defined(QUICHE_MOQ_TRACE)
     // A mitigated error is retried as a blocked write, so it ends nothing.
-    FinishMoqTraceWrite(coalesced, result);
+    FinishQuicTraceWrite(coalesced, result);
 #endif
     if (IsWriteBlockedStatus(result.status)) {
       QUICHE_DCHECK(writer_->IsWriteBlocked());
@@ -6611,7 +6610,7 @@ bool QuicConnection::FlushCoalescedPacket() {
             coalesced_packet_.self_address(), coalesced_packet_.peer_address(),
             coalesced_packet_.ecn_codepoint(), coalesced_packet_.flow_label());
 #if defined(QUICHE_MOQ_TRACE)
-        buffered_packets_.back().moq_trace_send = std::move(coalesced);
+        buffered_packets_.back().quic_trace_send = std::move(coalesced);
 #endif
       }
     }

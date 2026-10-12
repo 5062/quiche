@@ -332,10 +332,10 @@ void QuicUdpSocketApi::ReadPacket(
   const uint64_t read_ns = quic_trace::now_ns();
   if (bytes_read < 0) {
     const int read_error = errno;
-    trace_socket.finish_at(MoqTraceSocketOutcome(read_error), {}, read_ns);
+    trace_socket.finish_at(QuicTraceSocketOutcome(read_error), {}, read_ns);
     errno = read_error;
   } else {
-    result->moq_trace_read_ns = read_ns;
+    result->quic_trace_read_ns = read_ns;
     trace_socket.finish_at(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS,
                            {1, 1, static_cast<uint64_t>(bytes_read)}, read_ns);
   }
@@ -445,7 +445,7 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
     const uint64_t read_ns = quic_trace::now_ns();
     if (packets_read < 0) {
       const int read_error = errno;
-      trace_socket.finish_at(MoqTraceSocketOutcome(read_error), {}, read_ns);
+      trace_socket.finish_at(QuicTraceSocketOutcome(read_error), {}, read_ns);
       errno = read_error;
     } else {
       quic_trace::SocketStats trace_stats;
@@ -453,7 +453,7 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
       trace_stats.datagrams = packets_read;
       for (int i = 0; i < packets_read; ++i) {
         trace_stats.bytes += hdrs[i].msg_len;
-        (*results)[i].moq_trace_read_ns = read_ns;
+        (*results)[i].quic_trace_read_ns = read_ns;
       }
       trace_socket.finish_at(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS, trace_stats,
                              read_ns);
@@ -644,7 +644,7 @@ WriteResult QuicUdpSocketApi::WritePacket(
     trace_stats.datagrams = 1;
     trace_stats.bytes = rc;
   }
-  trace_socket.finish_at(MoqTraceSocketOutcome(write_error), trace_stats,
+  trace_socket.finish_at(QuicTraceSocketOutcome(write_error), trace_stats,
                          sent_ns);
   if (rc < 0) {
     errno = write_error;
@@ -657,7 +657,7 @@ WriteResult QuicUdpSocketApi::WritePacket(
                                 : WRITE_STATUS_ERROR,
                             errno);
 #if defined(QUICHE_MOQ_TRACE)
-  result.moq_trace_sent_ns = sent_ns;
+  result.quic_trace_sent_ns = sent_ns;
 #endif
   return result;
 }

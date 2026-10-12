@@ -57,20 +57,20 @@ class QuicConnectionPeer {
 #if defined(QUICHE_MOQ_TRACE)
   // Whether packet processing still owns an RX trace, including disabled
   // traces.
-  static bool HasMoqTraceRxPacket(const QuicConnection& connection) {
-    return connection.moq_trace_rx_packet_.has_value();
+  static bool HasQuicTraceRxPacket(const QuicConnection& connection) {
+    return connection.quic_trace_rx_packet_.has_value();
   }
 
   // Encoded length currently assigned to the packet being processed.
-  static size_t MoqTraceRxPacketLength(const QuicConnection& connection) {
-    return connection.moq_trace_rx_packet_length_;
+  static size_t QuicTraceRxPacketLength(const QuicConnection& connection) {
+    return connection.quic_trace_rx_packet_length_;
   }
 
   // Starts the lifecycle of a packet a test injects without a traced read at
   // its injection, as a read completing then would.
-  static void SetMoqTraceStampUnreadPackets(QuicConnection* connection,
-                                            bool stamp) {
-    connection->moq_trace_stamp_unread_packets_ = stamp;
+  static void SetQuicTraceStampUnreadPackets(QuicConnection* connection,
+                                             bool stamp) {
+    connection->quic_trace_stamp_unread_packets_ = stamp;
   }
 #endif
 

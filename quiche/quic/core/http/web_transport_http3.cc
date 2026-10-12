@@ -64,7 +64,7 @@ WebTransportHttp3::WebTransportHttp3(QuicSpdySession* session,
 
 #if defined(QUICHE_MOQ_TRACE)
 std::optional<uint64_t> WebTransportHttp3::TraceConnectionId() const {
-  return session_->connection()->moq_trace_connection_id();
+  return session_->connection()->quic_trace_connection_id();
 }
 #endif
 
@@ -79,7 +79,7 @@ void WebTransportHttp3::AssociateStream(QuicStreamId stream_id) {
 #if defined(QUICHE_MOQ_TRACE)
   // The visitor may accept and read the stream before returning, so the
   // scope spans the rest of this function.
-  QuicConnection::MoqTraceApplicationScope trace_application(
+  QuicConnection::QuicTraceApplicationScope trace_application(
       session_->connection());
 #endif
   if (QuicUtils::IsBidirectionalStreamId(stream_id, version)) {

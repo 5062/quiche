@@ -142,7 +142,7 @@ PendingStream::PendingStream(QuicStreamId id, QuicSession& session)
                         BIDIRECTIONAL),
       connection_flow_controller_(session.flow_controller()),
 #if defined(QUICHE_MOQ_TRACE)
-      moq_trace_connection_(session.connection()),
+      quic_trace_connection_(session.connection()),
 #endif
       flow_controller_(&session, id,
                        /*is_connection_flow_controller*/ false,
@@ -191,9 +191,9 @@ void PendingStream::OnUnrecoverableError(QuicErrorCode error,
 QuicStreamId PendingStream::id() const { return id_; }
 
 #if defined(QUICHE_MOQ_TRACE)
-void PendingStream::OnMoqTraceDataAccepted(uint64_t accepted_ns) {
-  if (moq_trace_connection_ != nullptr) {
-    moq_trace_connection_->RecordMoqTraceStreamFrameAccepted(accepted_ns);
+void PendingStream::OnQuicTraceDataAccepted(uint64_t accepted_ns) {
+  if (quic_trace_connection_ != nullptr) {
+    quic_trace_connection_->RecordQuicTraceStreamFrameAccepted(accepted_ns);
   }
 }
 #endif
@@ -1081,34 +1081,34 @@ bool QuicStream::HasBufferedData() const {
 ParsedQuicVersion QuicStream::version() const { return session_->version(); }
 
 #if defined(QUICHE_MOQ_TRACE)
-uint64_t QuicStream::MoqTraceConnectionId() const {
+uint64_t QuicStream::QuicTraceConnectionId() const {
   QuicConnection* connection = session_->connection();
-  return connection == nullptr ? 0 : connection->moq_trace_connection_id();
+  return connection == nullptr ? 0 : connection->quic_trace_connection_id();
 }
 
-void QuicStream::MoqTraceFlowControl() {
+void QuicStream::QuicTraceFlowControl() {
   const bool blocked = !write_side_closed_ && HasBufferedData() &&
                        CalculateSendWindowSize() == 0;
   if (!blocked) {
-    moq_trace_flow_blocked_.finish();
+    quic_trace_flow_blocked_.finish();
     return;
   }
   const quic_trace_send_blocked_reason reason =
       flow_controller_.has_value() && flow_controller_->SendWindowSize() == 0
           ? QUIC_TRACE_SEND_BLOCKED_REASON_STREAM_FLOW_CONTROL
           : QUIC_TRACE_SEND_BLOCKED_REASON_CONNECTION_FLOW_CONTROL;
-  if (moq_trace_flow_blocked_.active() && moq_trace_flow_reason_ == reason) {
+  if (quic_trace_flow_blocked_.active() && quic_trace_flow_reason_ == reason) {
     return;
   }
-  moq_trace_flow_blocked_ =
-      quic_trace::SendBlocked(MoqTraceConnectionId(), reason, id());
-  moq_trace_flow_reason_ = reason;
+  quic_trace_flow_blocked_ =
+      quic_trace::SendBlocked(QuicTraceConnectionId(), reason, id());
+  quic_trace_flow_reason_ = reason;
 }
 
-void QuicStream::OnMoqTraceDataAccepted(uint64_t accepted_ns) {
+void QuicStream::OnQuicTraceDataAccepted(uint64_t accepted_ns) {
   if (QuicConnection* connection = session_->connection();
       connection != nullptr) {
-    connection->RecordMoqTraceStreamFrameAccepted(accepted_ns);
+    connection->RecordQuicTraceStreamFrameAccepted(accepted_ns);
   }
 }
 #endif
@@ -1437,7 +1437,7 @@ bool QuicStream::WriteStreamData(QuicStreamOffset offset,
 void QuicStream::WriteBufferedData(EncryptionLevel level) {
   QUICHE_DCHECK(!write_side_closed_ && (HasBufferedData() || fin_buffered_));
 #if defined(QUICHE_MOQ_TRACE)
-  absl::Cleanup moq_trace_flow_control = [this] { MoqTraceFlowControl(); };
+  absl::Cleanup quic_trace_flow_control = [this] { QuicTraceFlowControl(); };
 #endif
 
   if (session_->ShouldYield(id())) {
@@ -1553,10 +1553,10 @@ bool QuicStream::CanWriteNewData() const {
 #if defined(QUICHE_MOQ_TRACE)
   // A writer is blocked from the first refusal until it is accepted again.
   if (can_write) {
-    moq_trace_buffer_blocked_.finish();
-  } else if (!moq_trace_buffer_blocked_.active()) {
-    moq_trace_buffer_blocked_ = quic_trace::SendBlocked(
-        MoqTraceConnectionId(), QUIC_TRACE_SEND_BLOCKED_REASON_SEND_BUFFER,
+    quic_trace_buffer_blocked_.finish();
+  } else if (!quic_trace_buffer_blocked_.active()) {
+    quic_trace_buffer_blocked_ = quic_trace::SendBlocked(
+        QuicTraceConnectionId(), QUIC_TRACE_SEND_BLOCKED_REASON_SEND_BUFFER,
         id());
   }
 #endif

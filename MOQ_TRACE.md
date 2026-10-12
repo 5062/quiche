@@ -41,7 +41,7 @@ code:
 
 | Call site | Emission |
 | --- | --- |
-| `QuicConnection::OnPacket`, `QuicConnection::FinishMoqTracePacket` | RX packet start at the completion of the receive system call that returned its datagram, a `read_queue` phase until processing begins, and the end with its outcome; early framer returns close before processing another packet |
+| `QuicConnection::OnPacket`, `QuicConnection::FinishQuicTracePacket` | RX packet start at the completion of the receive system call that returned its datagram, a `read_queue` phase until processing begins, and the end with its outcome; early framer returns close before processing another packet |
 | `QuicConnection` public header, header unprotect, payload decrypt, frame processing | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, `frame_process` |
 | `QuicStreamSequencer::OnFrameData`, `QuicConnection::OnStreamFrame` | STREAM frame byte range, stamped when the receive buffer accepted its bytes and before the stream is told; `dropped` for a frame the session or stream discarded |
 | `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start, phases `frame_encode` and `packet_encrypt`, then a `send_queue` phase |
@@ -55,7 +55,7 @@ preserves for the dispatcher's buffered packet store, and then on
 `ReceivedPacketInfo`, which the connection keeps for coalesced packets and
 restores for undecryptable packets it replays, so every packet starts at its
 own read. A packet that came from no traced read, such as one a test builds,
-gets no trace. A TX packet waits in a `MoqTraceSend` holder that travels with
+gets no trace. A TX packet waits in a `QuicTraceSend` holder that travels with
 its bytes through the coalescer and the write-blocked queue, and ends at the
 `WriteResult` of the send that carried it. A batch writer reports no traced
 send for the packets it only buffered, so those record abandonment; the relay
@@ -85,7 +85,7 @@ of the phases that describe other layers:
   `SendObjects` returns, which belongs to that copy. `moq_trace::FanOut` and
   `moq_trace::CopyWork` from the toolkit's C++ facade record it.
 - Each application callback made while an inbound packet is being processed
-  runs inside `QuicConnection::MoqTraceApplicationScope` and is recorded as the
+  runs inside `QuicConnection::QuicTraceApplicationScope` and is recorded as the
   RX `application` packet phase. The scopes sit in the `WebTransportStreamAdapter`
   read and write callbacks and in `WebTransportHttp3::AssociateStream`, where
   MoQT accepts and reads a new stream. Nested callbacks extend one phase.

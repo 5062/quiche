@@ -13,8 +13,8 @@
 #include <string>
 
 #include "quiche/common/platform/api/quiche_logging.h"
-#include "quiche/quic/core/moq_trace_utils.h"
 #include "quiche/quic/core/quic_syscall_wrapper.h"
+#include "quiche/quic/core/quic_trace_utils.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/platform/api/quic_flag_utils.h"
 #include "quiche/quic/platform/api/quic_ip_address.h"
@@ -27,7 +27,7 @@ namespace quic {
 namespace {
 
 // A GSO buffer represents several UDP datagrams, including its shorter tail.
-uint64_t MoqTraceDatagrams(msghdr header, size_t bytes) {
+uint64_t QuicTraceDatagrams(msghdr header, size_t bytes) {
   for (cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != nullptr;
        cmsg = CMSG_NXTHDR(&header, cmsg)) {
     if (cmsg->cmsg_level == SOL_UDP && cmsg->cmsg_type == UDP_SEGMENT &&
@@ -302,10 +302,10 @@ WriteResult QuicLinuxSocketUtils::WritePacket(int fd, const QuicMsgHdr& hdr,
   quic_trace::SocketStats trace_stats;
   if (rc >= 0) {
     trace_stats.buffers = 1;
-    trace_stats.datagrams = MoqTraceDatagrams(*hdr.hdr(), rc);
+    trace_stats.datagrams = QuicTraceDatagrams(*hdr.hdr(), rc);
     trace_stats.bytes = rc;
   }
-  trace_socket.finish(MoqTraceSocketOutcome(write_error, enobufs_blocked),
+  trace_socket.finish(QuicTraceSocketOutcome(write_error, enobufs_blocked),
                       trace_stats);
   if (rc < 0) {
     errno = write_error;
@@ -354,11 +354,11 @@ WriteResult QuicLinuxSocketUtils::WriteMultiplePackets(int fd,
     trace_stats.buffers = rc;
     for (int i = 0; i < rc; ++i) {
       trace_stats.datagrams +=
-          MoqTraceDatagrams(mhdr->mhdr()[i].msg_hdr, mhdr->mhdr()[i].msg_len);
+          QuicTraceDatagrams(mhdr->mhdr()[i].msg_hdr, mhdr->mhdr()[i].msg_len);
     }
     trace_stats.bytes = mhdr->num_bytes_sent(rc);
   }
-  trace_socket.finish(MoqTraceSocketOutcome(write_error), trace_stats);
+  trace_socket.finish(QuicTraceSocketOutcome(write_error), trace_stats);
   if (rc <= 0) {
     errno = write_error;
   }

@@ -554,10 +554,10 @@ bool QuicConnectionPeer::TestLastReceivedPacketInfoDefaults() {
 #if defined(QUICHE_MOQ_TRACE)
   // The traced build adds the read time of the packet's datagram.
   constexpr size_t kExpectedSize = 280;
-  const bool moq_trace_defaults = info.moq_trace_read_ns == 0;
+  const bool quic_trace_defaults = info.quic_trace_read_ns == 0;
 #else
   constexpr size_t kExpectedSize = 272;
-  const bool moq_trace_defaults = true;
+  const bool quic_trace_defaults = true;
 #endif
   QUIC_DVLOG(2)
       << "QuicConnectionPeer::TestLastReceivedPacketInfoDefaults"
@@ -585,7 +585,7 @@ bool QuicConnectionPeer::TestLastReceivedPacketInfoDefaults() {
          // There's no simple way to compare all the values of QuicPacketHeader.
          info.frames.empty() && info.ecn_codepoint == ECN_NOT_ECT &&
          info.actual_destination_address == QuicSocketAddress() &&
-         moq_trace_defaults &&
+         quic_trace_defaults &&
          // If the condition below fails, the contents of ReceivedPacketInfo
          // have changed. Please add the relevant conditions and update the
          // length below.

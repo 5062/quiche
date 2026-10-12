@@ -106,7 +106,7 @@ void QuicStreamSequencer::OnFrameData(QuicStreamOffset byte_offset,
   // The buffer holds the frame's bytes now, and nothing has told the stream,
   // so this is the instant the frame was accepted. Duplicate bytes the buffer
   // already held count as accepted.
-  stream_->OnMoqTraceDataAccepted(quic_trace::now_ns());
+  stream_->OnQuicTraceDataAccepted(quic_trace::now_ns());
 #endif
 
   if (bytes_written == 0) {

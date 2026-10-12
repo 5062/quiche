@@ -1771,7 +1771,7 @@ bool QuicFramer::ProcessIetfDataPacket(QuicDataReader* encrypted_reader,
   }
 
 #if defined(QUICHE_MOQ_TRACE)
-  visitor_->OnMoqTracePacketLength(encrypted_reader->FullPayload().size());
+  visitor_->OnQuicTracePacketLength(encrypted_reader->FullPayload().size());
 #endif
 
   absl::string_view associated_data;

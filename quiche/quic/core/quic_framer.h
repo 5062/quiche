@@ -93,7 +93,7 @@ class QUICHE_EXPORT QuicFramerVisitorInterface {
 
 #if defined(QUICHE_MOQ_TRACE)
   // Encoded size after validating the length and separating coalesced packets.
-  virtual void OnMoqTracePacketLength(size_t /*length*/) {}
+  virtual void OnQuicTracePacketLength(size_t /*length*/) {}
 #endif
 
   // Called only when |perspective_| is IS_CLIENT and a version negotiation

@@ -1,5 +1,5 @@
-#ifndef QUICHE_QUIC_CORE_MOQ_TRACE_UTILS_H_
-#define QUICHE_QUIC_CORE_MOQ_TRACE_UTILS_H_
+#ifndef QUICHE_QUIC_CORE_QUIC_TRACE_UTILS_H_
+#define QUICHE_QUIC_CORE_QUIC_TRACE_UTILS_H_
 
 #if defined(QUICHE_MOQ_TRACE)
 
@@ -7,8 +7,8 @@
 #include <cerrno>
 #include <cstring>
 #include <optional>
-#include <string>
 #include <quic_trace/trace.hpp>
+#include <string>
 
 #include "quiche/quic/core/quic_packets.h"
 #include "quiche/quic/core/quic_types.h"
@@ -17,7 +17,7 @@
 namespace quic {
 
 // Translate a completed send's errno, with ENOBUFS policy chosen by the writer.
-inline quic_trace_socket_outcome MoqTraceSocketOutcome(
+inline quic_trace_socket_outcome QuicTraceSocketOutcome(
     int error, bool enobufs_blocked = false) {
   if (error == 0) {
     return QUIC_TRACE_SOCKET_OUTCOME_SUCCESS;
@@ -35,8 +35,8 @@ inline quic_trace_socket_outcome MoqTraceSocketOutcome(
 // Describe one end of a connection path for `quic_connection_path`. An
 // uninitialized address, such as a wildcard the stack never resolved, is
 // recorded as the unspecified IPv6 address with its port.
-inline quic_trace::PathEndpoint MoqTracePathEndpoint(
-    const QuicIpAddress& host, uint16_t port) {
+inline quic_trace::PathEndpoint QuicTracePathEndpoint(const QuicIpAddress& host,
+                                                      uint16_t port) {
   const std::string packed = host.Normalized().ToPackedString();
   if (packed.size() == 4) {
     std::array<uint8_t, 4> address;
@@ -51,7 +51,7 @@ inline quic_trace::PathEndpoint MoqTracePathEndpoint(
 }
 
 // Map the encryption level to the shared provider's packet-space enum.
-inline quic_trace_packet_space MoqTracePacketSpace(EncryptionLevel level) {
+inline quic_trace_packet_space QuicTracePacketSpace(EncryptionLevel level) {
   switch (level) {
     case ENCRYPTION_INITIAL:
       return QUIC_TRACE_PACKET_SPACE_INITIAL;
@@ -68,7 +68,7 @@ inline quic_trace_packet_space MoqTracePacketSpace(EncryptionLevel level) {
 }
 
 // Non-data long headers carry no packet number space.
-inline std::optional<quic_trace_packet_space> MoqTracePacketSpace(
+inline std::optional<quic_trace_packet_space> QuicTracePacketSpace(
     const QuicPacketHeader& header) {
   if (header.form == IETF_QUIC_SHORT_HEADER_PACKET) {
     return QUIC_TRACE_PACKET_SPACE_DATA;
@@ -89,4 +89,4 @@ inline std::optional<quic_trace_packet_space> MoqTracePacketSpace(
 
 #endif  // defined(QUICHE_MOQ_TRACE)
 
-#endif  // QUICHE_QUIC_CORE_MOQ_TRACE_UTILS_H_
+#endif  // QUICHE_QUIC_CORE_QUIC_TRACE_UTILS_H_

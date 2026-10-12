@@ -125,7 +125,7 @@ bool QuicPacketReader::ReadAndDispatchPackets(
 #if defined(QUICHE_MOQ_TRACE)
     // QuicUdpSocketApi stamped the receive system call that filled this
     // result, and records that call as a socket operation itself.
-    packet.set_moq_trace_read_ns(result.moq_trace_read_ns);
+    packet.set_quic_trace_read_ns(result.quic_trace_read_ns);
 #endif
     QuicSocketAddress self_address(self_ip, port);
     processor->ProcessPacket(self_address, peer_address, packet);

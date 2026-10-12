@@ -80,7 +80,7 @@ class QUICHE_EXPORT PendingStream
   QuicStreamId id() const override;
   ParsedQuicVersion version() const override;
 #if defined(QUICHE_MOQ_TRACE)
-  void OnMoqTraceDataAccepted(uint64_t accepted_ns) override;
+  void OnQuicTraceDataAccepted(uint64_t accepted_ns) override;
 #endif
 
   // Buffers the contents of |frame|. Frame must have a non-zero offset.
@@ -149,7 +149,7 @@ class QUICHE_EXPORT PendingStream
   QuicFlowController* connection_flow_controller_;
 #if defined(QUICHE_MOQ_TRACE)
   // The connection whose current packet a frame's acceptance belongs to.
-  QuicConnection* moq_trace_connection_;
+  QuicConnection* quic_trace_connection_;
 #endif
   // Stream-level flow controller.
   QuicFlowController flow_controller_;
@@ -184,7 +184,7 @@ class QUICHE_EXPORT QuicStream : public QuicStreamSequencer::StreamInterface {
   QuicStreamId id() const override { return id_; }
   ParsedQuicVersion version() const override;
 #if defined(QUICHE_MOQ_TRACE)
-  void OnMoqTraceDataAccepted(uint64_t accepted_ns) override;
+  void OnQuicTraceDataAccepted(uint64_t accepted_ns) override;
 #endif
   // Called by the stream subclass after it has consumed the final incoming
   // data.
@@ -581,16 +581,16 @@ class QUICHE_EXPORT QuicStream : public QuicStreamSequencer::StreamInterface {
 #if defined(QUICHE_MOQ_TRACE)
   // Opens or ends the interval in which flow control holds this stream's
   // buffered data, after a write decided how much it may send.
-  void MoqTraceFlowControl();
+  void QuicTraceFlowControl();
   // The id moq-trace events of this stream's connection carry.
-  uint64_t MoqTraceConnectionId() const;
+  uint64_t QuicTraceConnectionId() const;
 
-  quic_trace::SendBlocked moq_trace_flow_blocked_;
-  quic_trace_send_blocked_reason moq_trace_flow_reason_ =
+  quic_trace::SendBlocked quic_trace_flow_blocked_;
+  quic_trace_send_blocked_reason quic_trace_flow_reason_ =
       QUIC_TRACE_SEND_BLOCKED_REASON_STREAM_FLOW_CONTROL;
   // The interval in which the send buffer refuses new data. It follows the
   // answers `CanWriteNewData` gives, and that query is const.
-  mutable quic_trace::SendBlocked moq_trace_buffer_blocked_;
+  mutable quic_trace::SendBlocked quic_trace_buffer_blocked_;
 #endif
 
   // Called when bytes are sent to the peer.

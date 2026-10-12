@@ -356,8 +356,10 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
   // completed, on the moq-trace clock, or 0 when the packet did not come from
   // a traced read. A packet without it gets no packet trace, because its
   // lifecycle must start at that read.
-  uint64_t moq_trace_read_ns() const { return moq_trace_read_ns_; }
-  void set_moq_trace_read_ns(uint64_t read_ns) { moq_trace_read_ns_ = read_ns; }
+  uint64_t quic_trace_read_ns() const { return quic_trace_read_ns_; }
+  void set_quic_trace_read_ns(uint64_t read_ns) {
+    quic_trace_read_ns_ = read_ns;
+  }
 #endif
 
   // By default, gtest prints the raw bytes of an object. The bool data
@@ -385,7 +387,7 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
   // IPv6 flow label.
   uint32_t ipv6_flow_label_;
 #if defined(QUICHE_MOQ_TRACE)
-  uint64_t moq_trace_read_ns_ = 0;
+  uint64_t quic_trace_read_ns_ = 0;
 #endif
 };
 
@@ -398,13 +400,13 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
 // writer, and the holder travels with the bytes. Destroying the holder records
 // every packet still in it as abandoned: a packet that was never sent, or one
 // handed to a writer that sends it later without telling when.
-class QUICHE_EXPORT MoqTraceSend {
+class QUICHE_EXPORT QuicTraceSend {
  public:
-  MoqTraceSend() = default;
-  MoqTraceSend(MoqTraceSend&&) = default;
-  MoqTraceSend& operator=(MoqTraceSend&&) = default;
-  MoqTraceSend(const MoqTraceSend&) = delete;
-  MoqTraceSend& operator=(const MoqTraceSend&) = delete;
+  QuicTraceSend() = default;
+  QuicTraceSend(QuicTraceSend&&) = default;
+  QuicTraceSend& operator=(QuicTraceSend&&) = default;
+  QuicTraceSend(const QuicTraceSend&) = delete;
+  QuicTraceSend& operator=(const QuicTraceSend&) = delete;
 
   // Holds a packet whose encryption just ended and starts its send_queue phase.
   void Add(quic_trace::Packet packet) {
@@ -414,7 +416,7 @@ class QUICHE_EXPORT MoqTraceSend {
   }
 
   // Takes every packet of |other|, as when packets coalesce into one datagram.
-  void Append(MoqTraceSend&& other) {
+  void Append(QuicTraceSend&& other) {
     for (auto& entry : other.packets_) {
       packets_.push_back(std::move(entry));
     }
@@ -508,7 +510,7 @@ struct QUICHE_EXPORT SerializedPacket {
 #if defined(QUICHE_MOQ_TRACE)
   // The traced packet these bytes hold, waiting for its send. Moves with the
   // packet; a copy made by CopySerializedPacket does not carry it.
-  MoqTraceSend moq_trace_send;
+  QuicTraceSend quic_trace_send;
 #endif
 };
 

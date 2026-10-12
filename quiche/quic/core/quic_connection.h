@@ -767,7 +767,7 @@ class QUICHE_EXPORT QuicConnection
   void OnDecryptedPacket(size_t length, EncryptionLevel level) override;
 #if defined(QUICHE_MOQ_TRACE)
   // Set the encoded length once the framer has separated coalesced packets.
-  void OnMoqTracePacketLength(size_t length) override;
+  void OnQuicTracePacketLength(size_t length) override;
 #endif
   bool OnPacketHeader(const QuicPacketHeader& header) override;
   void OnCoalescedPacket(const QuicEncryptedPacket& packet) override;
@@ -926,12 +926,12 @@ class QUICHE_EXPORT QuicConnection
 #if defined(QUICHE_MOQ_TRACE)
   // Records when the receive buffer accepted the bytes of the STREAM frame
   // being processed, which is that frame's moq-trace timestamp.
-  void RecordMoqTraceStreamFrameAccepted(uint64_t accepted_ns) {
-    moq_trace_stream_frame_accepted_ns_ = accepted_ns;
+  void RecordQuicTraceStreamFrameAccepted(uint64_t accepted_ns) {
+    quic_trace_stream_frame_accepted_ns_ = accepted_ns;
   }
 
-  uint64_t moq_trace_connection_id() const {
-    return moq_trace_connection_id_;
+  uint64_t quic_trace_connection_id() const {
+    return quic_trace_connection_id_;
   }
 
   // Records a synchronous application callback as the RX `application` phase.
@@ -940,12 +940,12 @@ class QUICHE_EXPORT QuicConnection
   // outermost scope ends the open `frame_process` phase so the two never
   // overlap. Nested scopes extend the outermost one. Outside packet processing
   // a scope records nothing.
-  class QUICHE_EXPORT MoqTraceApplicationScope {
+  class QUICHE_EXPORT QuicTraceApplicationScope {
    public:
-    explicit MoqTraceApplicationScope(QuicConnection* connection);
-    ~MoqTraceApplicationScope();
-    MoqTraceApplicationScope(const MoqTraceApplicationScope&) = delete;
-    MoqTraceApplicationScope& operator=(const MoqTraceApplicationScope&) =
+    explicit QuicTraceApplicationScope(QuicConnection* connection);
+    ~QuicTraceApplicationScope();
+    QuicTraceApplicationScope(const QuicTraceApplicationScope&) = delete;
+    QuicTraceApplicationScope& operator=(const QuicTraceApplicationScope&) =
         delete;
 
    private:
@@ -1652,7 +1652,7 @@ class QUICHE_EXPORT QuicConnection
   // Process one packet and close any trace left by a framer early return.
   bool ProcessPacket(const QuicEncryptedPacket& packet);
 #if defined(QUICHE_MOQ_TRACE)
-  void FinishMoqTracePacket(quic_trace_packet_outcome outcome);
+  void FinishQuicTracePacket(quic_trace_packet_outcome outcome);
 #endif
   friend class test::QuicConnectionPeer;
 
@@ -1755,7 +1755,7 @@ class QUICHE_EXPORT QuicConnection
 #if defined(QUICHE_MOQ_TRACE)
     // The traced packets these bytes hold, which end when a later write
     // finally sends them.
-    MoqTraceSend moq_trace_send;
+    QuicTraceSend quic_trace_send;
 #endif
   };
 
@@ -1794,7 +1794,7 @@ class QUICHE_EXPORT QuicConnection
     // the moq-trace clock, or 0 for a datagram that came from no traced read.
     // It travels with the packet info, so a coalesced packet and an
     // undecryptable packet replayed later keep their original read.
-    uint64_t moq_trace_read_ns = 0;
+    uint64_t quic_trace_read_ns = 0;
 #endif
     // 8B remaining in the fourth cacheline.
     // TODO(martinduke): Remove once gfe2_reloadable_flag_quic_one_dcid is
@@ -2530,44 +2530,44 @@ class QUICHE_EXPORT QuicConnection
   Perspective perspective_;
 
 #if defined(QUICHE_MOQ_TRACE)
-  // Decides `CanWrite`, recording in `moq_trace_blocked_now_` the check that
+  // Decides `CanWrite`, recording in `quic_trace_blocked_now_` the check that
   // stopped data from being sent, if one of the traced checks did.
   bool CanWriteData(HasRetransmittableData retransmittable);
-  // Opens the blocked interval for `moq_trace_blocked_now_` and ends every
+  // Opens the blocked interval for `quic_trace_blocked_now_` and ends every
   // other, after a `CanWrite` for data. An interval ends at the first such
   // call its check no longer stops, which is when the data could go out.
-  void MoqTraceUpdateSendBlocked();
-  std::optional<quic_trace_send_blocked_reason> moq_trace_blocked_now_;
-  quic_trace::SendBlocked moq_trace_blocked_congestion_window_;
-  quic_trace::SendBlocked moq_trace_blocked_pacing_;
-  quic_trace::SendBlocked moq_trace_blocked_amplification_;
+  void QuicTraceUpdateSendBlocked();
+  std::optional<quic_trace_send_blocked_reason> quic_trace_blocked_now_;
+  quic_trace::SendBlocked quic_trace_blocked_congestion_window_;
+  quic_trace::SendBlocked quic_trace_blocked_pacing_;
+  quic_trace::SendBlocked quic_trace_blocked_amplification_;
 
-  const uint64_t moq_trace_connection_id_;
-  std::optional<quic_trace::Packet> moq_trace_rx_packet_;
-  std::optional<quic_trace::PacketPhase> moq_trace_rx_header_parse_;
-  std::optional<quic_trace::PacketPhase> moq_trace_rx_header_unprotect_;
-  std::optional<quic_trace::PacketPhase> moq_trace_rx_payload_decrypt_;
-  std::optional<quic_trace::PacketPhase> moq_trace_rx_frame_process_;
-  std::optional<quic_trace::PacketPhase> moq_trace_rx_application_;
-  int moq_trace_application_depth_ = 0;
-  size_t moq_trace_rx_packet_length_ = 0;
-  bool moq_trace_rx_control_packet_ = false;
+  const uint64_t quic_trace_connection_id_;
+  std::optional<quic_trace::Packet> quic_trace_rx_packet_;
+  std::optional<quic_trace::PacketPhase> quic_trace_rx_header_parse_;
+  std::optional<quic_trace::PacketPhase> quic_trace_rx_header_unprotect_;
+  std::optional<quic_trace::PacketPhase> quic_trace_rx_payload_decrypt_;
+  std::optional<quic_trace::PacketPhase> quic_trace_rx_frame_process_;
+  std::optional<quic_trace::PacketPhase> quic_trace_rx_application_;
+  int quic_trace_application_depth_ = 0;
+  size_t quic_trace_rx_packet_length_ = 0;
+  bool quic_trace_rx_control_packet_ = false;
   // The traced packets coalesced into |coalesced_packet_|, which end when the
   // coalesced datagram is sent.
-  MoqTraceSend moq_trace_coalesced_;
+  QuicTraceSend quic_trace_coalesced_;
   // When the stream's receive buffer accepted the STREAM frame being
   // processed, set by the stream and cleared before each frame.
-  std::optional<uint64_t> moq_trace_stream_frame_accepted_ns_;
+  std::optional<uint64_t> quic_trace_stream_frame_accepted_ns_;
   // The addresses the connection last recorded a `quic_connection_path` for.
   std::optional<std::pair<QuicSocketAddress, QuicSocketAddress>>
-      moq_trace_path_;
+      quic_trace_path_;
   // Tests that inject packets without a traced read set this, so their
   // packets start at injection instead of going untraced.
-  bool moq_trace_stamp_unread_packets_ = false;
+  bool quic_trace_stamp_unread_packets_ = false;
   // Ends the traced packets of one write by its send's outcome. A write
   // whose result names no traced send system call, such as one a batch writer
   // only buffered, leaves its packets unfinished, so they record abandonment.
-  void FinishMoqTraceWrite(MoqTraceSend& send, const WriteResult& result);
+  void FinishQuicTraceWrite(QuicTraceSend& send, const WriteResult& result);
 #endif
 
   // The ECN codepoint of the last packet to be sent to the writer, which

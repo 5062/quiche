@@ -219,13 +219,13 @@ class TestConnection : public QuicConnection {
   // Observe packet lengths at the authenticated header boundary, after
   // splitting.
   bool OnPacketHeader(const QuicPacketHeader& header) override {
-    moq_trace_rx_lengths.push_back(
-        QuicConnectionPeer::MoqTraceRxPacketLength(*this));
+    quic_trace_rx_lengths.push_back(
+        QuicConnectionPeer::QuicTraceRxPacketLength(*this));
     return QuicConnection::OnPacketHeader(header);
   }
 
   // Encoded RX lengths observed during this test's real framer invocations.
-  std::vector<size_t> moq_trace_rx_lengths;
+  std::vector<size_t> quic_trace_rx_lengths;
 #endif
 
   void OnEffectivePeerMigrationValidated(bool is_migration_linkable) override {
@@ -646,7 +646,7 @@ class QuicConnectionTest : public QuicTestWithParam<TestParams> {
     QUIC_DVLOG(2) << "QuicConnectionTest(" << PrintToString(GetParam()) << ")";
 #if defined(QUICHE_MOQ_TRACE)
     // The fixture injects packets directly, so each starts at its injection.
-    QuicConnectionPeer::SetMoqTraceStampUnreadPackets(&connection_, true);
+    QuicConnectionPeer::SetQuicTraceStampUnreadPackets(&connection_, true);
 #endif
     connection_.set_defer_send_in_response_to_packets(GetParam().ack_response ==
                                                       AckResponse::kDefer);
@@ -3358,7 +3358,7 @@ TEST_P(QuicConnectionTest, DuplicatePacket) {
   // the visitor OnStreamFrame() will be called.
   ProcessDataPacket(3);
 #if defined(QUICHE_MOQ_TRACE)
-  EXPECT_FALSE(QuicConnectionPeer::HasMoqTraceRxPacket(connection_));
+  EXPECT_FALSE(QuicConnectionPeer::HasQuicTraceRxPacket(connection_));
 #endif
   EXPECT_EQ(QuicPacketNumber(3u), LargestAcked(connection_.ack_frame()));
   EXPECT_TRUE(IsMissing(2));
@@ -9568,8 +9568,8 @@ TEST_P(QuicConnectionTest, CoalescedPacket) {
 
   EXPECT_TRUE(connection_.connected());
 #if defined(QUICHE_MOQ_TRACE)
-  EXPECT_EQ(connection_.moq_trace_rx_lengths, encrypted_lengths);
-  EXPECT_FALSE(QuicConnectionPeer::HasMoqTraceRxPacket(connection_));
+  EXPECT_EQ(connection_.quic_trace_rx_lengths, encrypted_lengths);
+  EXPECT_FALSE(QuicConnectionPeer::HasQuicTraceRxPacket(connection_));
 #endif
 }
 

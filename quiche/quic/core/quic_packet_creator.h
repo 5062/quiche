@@ -138,8 +138,8 @@ class QUICHE_EXPORT QuicPacketCreator {
   ~QuicPacketCreator();
 
 #if defined(QUICHE_MOQ_TRACE)
-  void set_moq_trace_connection_id(uint64_t connection_id) {
-    moq_trace_connection_id_ = connection_id;
+  void set_quic_trace_connection_id(uint64_t connection_id) {
+    quic_trace_connection_id_ = connection_id;
   }
 #endif
 
@@ -713,7 +713,7 @@ class QUICHE_EXPORT QuicPacketCreator {
   // Whether each queued frame resends data an earlier packet carried, in the
   // order of `queued_frames_`. A packet's own transmission type follows its
   // last retransmitted frame, so it cannot tell the frames apart.
-  std::vector<bool> moq_trace_queued_retransmissions_;
+  std::vector<bool> quic_trace_queued_retransmissions_;
 #endif
 
   // Serialization size of header + frames. If there is no queued frames,
@@ -772,10 +772,10 @@ class QUICHE_EXPORT QuicPacketCreator {
   bool append_scone_indicator_ = false;
 
 #if defined(QUICHE_MOQ_TRACE)
-  uint64_t moq_trace_connection_id_ = 0;
+  uint64_t quic_trace_connection_id_ = 0;
   // Set while an Initial packet is re-serialized into a coalesced datagram,
   // which must not start a second lifecycle for the same packet.
-  bool moq_trace_reserializing_ = false;
+  bool quic_trace_reserializing_ = false;
 #endif
 };
 

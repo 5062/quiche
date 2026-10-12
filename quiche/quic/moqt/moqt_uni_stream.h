@@ -78,12 +78,12 @@ class OutgoingUniStream : public webtransport::StreamVisitor {
     last_object_ = std::move(metadata);
   }
 #if defined(QUICHE_MOQ_TRACE)
-  std::optional<moq_trace::Object>& trace_object() { return trace_object_; }
+  std::optional<moq_trace::Object>& trace_copy() { return trace_copy_; }
   // Ends the copy in progress, if any, with how the stream stopped it.
-  void FinishTraceObject(moq_trace_object_outcome outcome) {
-    if (trace_object_.has_value()) {
-      trace_object_->finish(outcome);
-      trace_object_.reset();
+  void FinishTraceCopy(moq_trace_object_outcome outcome) {
+    if (trace_copy_.has_value()) {
+      trace_copy_->finish(outcome);
+      trace_copy_.reset();
     }
   }
 #endif
@@ -102,7 +102,7 @@ class OutgoingUniStream : public webtransport::StreamVisitor {
   // If nullopt, the stream header has not been written yet.
   std::optional<PublishedObjectMetadata> last_object_;
 #if defined(QUICHE_MOQ_TRACE)
-  std::optional<moq_trace::Object> trace_object_;
+  std::optional<moq_trace::Object> trace_copy_;
 #endif
 };
 
@@ -194,6 +194,12 @@ class QUICHE_EXPORT OutgoingSubgroupStream : public OutgoingUniStream {
   // When the stream stopped accepting writes in the middle of a traced copy.
   // The copy's blocked write lasts until the stream can take more.
   std::optional<uint64_t> trace_blocked_since_ns_;
+
+  // Starts the copy of `object` that this stream is about to write, when the
+  // cache traced the inbound object it came from.
+  void StartTraceCopy(const PublishedObject& object,
+                      SubscriptionPublisherInterface& visitor,
+                      uint64_t clone_start_ns);
 #endif
 
   // If this data stream is for SUBSCRIBE, reset it if an object has been
@@ -307,8 +313,10 @@ class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
   };
 
   void StartTraceObject(const PublishedObjectMetadata& metadata);
-  void TraceFragmentStored(const PublishedObjectMetadata& metadata,
+  void TraceObjectFragment(const PublishedObjectMetadata& metadata,
                            uint64_t store_start_ns, bool first_fragment);
+  // Ends the inbound object in progress, if any, with how it ended.
+  void FinishTraceObject(moq_trace_object_outcome outcome);
 
   std::optional<moq_trace::Object> trace_object_;
   std::optional<PendingTraceHeader> trace_header_;

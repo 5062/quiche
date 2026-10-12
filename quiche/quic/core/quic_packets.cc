@@ -398,7 +398,7 @@ std::unique_ptr<QuicReceivedPacket> QuicReceivedPacket::Clone() const {
 #if defined(QUICHE_MOQ_TRACE)
   // A clone waits in the dispatcher's buffered packet store and is processed
   // after a later read, but its lifecycle still starts at its own read.
-  clone->set_moq_trace_read_ns(moq_trace_read_ns_);
+  clone->set_quic_trace_read_ns(quic_trace_read_ns_);
 #endif
   return clone;
 }
@@ -467,7 +467,7 @@ SerializedPacket::SerializedPacket(SerializedPacket&& other)
       initial_header(other.initial_header)
 #if defined(QUICHE_MOQ_TRACE)
       ,
-      moq_trace_send(std::move(other.moq_trace_send))
+      quic_trace_send(std::move(other.quic_trace_send))
 #endif
 {
   if (this != &other) {

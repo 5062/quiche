@@ -254,7 +254,7 @@ class QUICHE_EXPORT QuicUdpSocketApi {
 #if defined(QUICHE_MOQ_TRACE)
     // When the receive system call that filled this result returned, on the
     // moq-trace clock. Every packet in the buffer starts its lifecycle here.
-    uint64_t moq_trace_read_ns = 0;
+    uint64_t quic_trace_read_ns = 0;
 #endif
 
     void Reset(size_t packet_buffer_length) {
@@ -262,7 +262,7 @@ class QUICHE_EXPORT QuicUdpSocketApi {
       packet_info.Reset();
       packet_buffer.buffer_len = packet_buffer_length;
 #if defined(QUICHE_MOQ_TRACE)
-      moq_trace_read_ns = 0;
+      quic_trace_read_ns = 0;
 #endif
     }
   };

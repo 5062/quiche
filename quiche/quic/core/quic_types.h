@@ -182,7 +182,7 @@ struct QUICHE_EXPORT WriteResult {
   // When the send system call that produced this result returned, on the
   // moq-trace clock, or 0 when no system call was made. A traced packet the
   // write carried ends at this instant.
-  uint64_t moq_trace_sent_ns = 0;
+  uint64_t quic_trace_sent_ns = 0;
 #endif
   // TODO(wub): In some cases, WRITE_STATUS_ERROR may set an error_code and
   // WRITE_STATUS_BLOCKED_DATA_BUFFERED may set bytes_written. This may need

@@ -1444,7 +1444,7 @@ WriteResult TestPacketWriter::WritePacket(
 #if defined(QUICHE_MOQ_TRACE)
   // The test writer stands in for an immediate send, so the packets it takes
   // end now.
-  result.moq_trace_sent_ns = quic_trace::now_ns();
+  result.quic_trace_sent_ns = quic_trace::now_ns();
 #endif
   return result;
 }

@@ -57,8 +57,8 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
 
 #if defined(QUICHE_MOQ_TRACE)
   moq_trace::ObjectPhase header_phase;
-  if (trace_object_.has_value()) {
-    header_phase = trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_HEADER_ENCODE);
+  if (trace_copy_.has_value()) {
+    header_phase = trace_copy_->phase(MOQ_TRACE_OBJECT_PHASE_HEADER_ENCODE);
   }
 #endif
   quiche::QuicheBuffer serialized_header =
@@ -77,11 +77,11 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
 #if defined(QUICHE_MOQ_TRACE)
   moq_trace::ObjectPhase write_phase;
   moq_trace::ObjectPhase transport_call;
-  if (trace_object_.has_value()) {
-    write_phase = trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
+  if (trace_copy_.has_value()) {
+    write_phase = trace_copy_->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
     // The stream builds and sends packets inside Writev, which is transport
     // work nested in the write.
-    transport_call = trace_object_->phase(MOQ_TRACE_OBJECT_PHASE_TRANSPORT_CALL);
+    transport_call = trace_copy_->phase(MOQ_TRACE_OBJECT_PHASE_TRANSPORT_CALL);
   }
 #endif
   absl::Status write_status =
@@ -89,8 +89,8 @@ bool OutgoingUniStream::WriteObjectToStream(PublishedObject& object,
 #if defined(QUICHE_MOQ_TRACE)
   transport_call.finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
                                           : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
-  if (trace_object_.has_value()) {
-    trace_object_->set_stream_offset_end(stream_.WriteOffset());
+  if (trace_copy_.has_value()) {
+    trace_copy_->set_stream_offset_end(stream_.WriteOffset());
   }
   write_phase.finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
                                      : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
@@ -130,7 +130,7 @@ OutgoingSubgroupStream::~OutgoingSubgroupStream() {
 #if defined(QUICHE_MOQ_TRACE)
   // The stream is going away with a copy unfinished, so it was reset or closed
   // under the copy.
-  FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_RESET);
+  FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_RESET);
 #endif
   // Though it might seem intuitive that the session object has to outlive the
   // connection object (and this is indeed how something like QuicSession and
@@ -153,7 +153,7 @@ void OutgoingSubgroupStream::OnCanWrite() { SendObjects(); }
 void OutgoingSubgroupStream::OnStopSendingReceived(
     webtransport::StreamErrorCode error_code) {
 #if defined(QUICHE_MOQ_TRACE)
-  FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_RESET);
+  FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_RESET);
 #endif
   SubscriptionPublisherInterface* visitor = visitor_.GetIfAvailable();
   if (visitor != nullptr) {
@@ -163,7 +163,7 @@ void OutgoingSubgroupStream::OnStopSendingReceived(
 
 void OutgoingSubgroupStream::DeliveryTimeoutDelegate::OnAlarm() {
 #if defined(QUICHE_MOQ_TRACE)
-  stream_->FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_EXPIRED);
+  stream_->FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_EXPIRED);
 #endif
   SubscriptionPublisherInterface* visitor = stream_->visitor_.GetIfAvailable();
   if (visitor != nullptr) {
@@ -177,14 +177,14 @@ void OutgoingSubgroupStream::SendObjects() {
   // The cache calls this listener inside its fan-out of a new object, so the
   // copy's work here is excluded from that fan-out's notify phase.
   moq_trace::CopyWork copy_work;
-  if (trace_object().has_value()) {
+  if (trace_copy().has_value()) {
     copy_work.begin(quic_trace::now_ns());
   }
   // A blocked write ends once the stream accepts writes again. A listener can
   // call in while the stream is still blocked, and that does not end it.
   if (trace_blocked_since_ns_.has_value() && stream().CanWrite()) {
-    if (trace_object().has_value()) {
-      trace_object()
+    if (trace_copy().has_value()) {
+      trace_copy()
           ->phase_at(MOQ_TRACE_OBJECT_PHASE_WRITE_BLOCKED,
                      *trace_blocked_since_ns_)
           .finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
@@ -216,7 +216,7 @@ void OutgoingSubgroupStream::SendObjects() {
 #if defined(QUICHE_MOQ_TRACE)
       // An object outside the window starts no copy. A copy already in
       // progress had the window shrink under it, so the relay drops it.
-      FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_DROPPED);
+      FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_DROPPED);
 #endif
       // It is possible that the next object became irrelevant due to a
       // REQUEST_UPDATE.  Close the stream if so.
@@ -226,33 +226,11 @@ void OutgoingSubgroupStream::SendObjects() {
       return;
     }
 #if defined(QUICHE_MOQ_TRACE)
-    if (already_delivered_ == 0 && object->metadata.trace_logical_id.has_value()) {
-      moq_trace::ObjectContext context;
-      context.logical_id = *object->metadata.trace_logical_id;
-      context.identity = moq_trace::ObjectIdentity{
-          track_alias_, object->metadata.location.group,
-          object->metadata.location.object};
-      context.direction = QUIC_TRACE_DIRECTION_TX;
-      context.session_id = visitor->TraceSessionId();
-      context.connection_id = visitor->TraceConnectionId();
-      context.stream_id = stream().GetStreamId();
-      context.stream_offset_start = stream().WriteOffset();
-      context.start_ns = clone_start_ns;
-      context.payload_bytes = object->metadata.payload_length;
-      trace_object().emplace(context);
-      copy_work.begin(clone_start_ns);
-      // The copy waited from the instant the cache made the object readable
-      // until this clone. Listeners run synchronously, so the wait includes
-      // delivering the object to subscribers notified before this one.
-      if (object->metadata.trace_ready_ns.has_value()) {
-        trace_object()
-            ->phase_at(MOQ_TRACE_OBJECT_PHASE_DELIVERY_WAIT,
-                       *object->metadata.trace_ready_ns)
-            .finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, clone_start_ns);
+    if (already_delivered_ == 0) {
+      StartTraceCopy(*object, *visitor, clone_start_ns);
+      if (trace_copy().has_value()) {
+        copy_work.begin(clone_start_ns);
       }
-      auto clone = trace_object()->phase_at(MOQ_TRACE_OBJECT_PHASE_CLONE,
-                                            clone_start_ns);
-      clone.finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
     }
 #endif
 
@@ -261,7 +239,7 @@ void OutgoingSubgroupStream::SendObjects() {
         visitor->clock()->ApproximateNow() - object->metadata.arrival_time >
             delivery_timeout) {
 #if defined(QUICHE_MOQ_TRACE)
-      FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_EXPIRED);
+      FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_EXPIRED);
 #endif
       visitor->OnStreamTimeout(index_);
       stream().ResetWithUserCode(kResetCodeDeliveryTimeout);
@@ -294,10 +272,10 @@ void OutgoingSubgroupStream::SendObjects() {
 #if defined(QUICHE_MOQ_TRACE)
       moq_trace::ObjectPhase write_phase;
       moq_trace::ObjectPhase transport_call;
-      if (trace_object().has_value()) {
-        write_phase = trace_object()->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
+      if (trace_copy().has_value()) {
+        write_phase = trace_copy()->phase(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_WRITE);
         transport_call =
-            trace_object()->phase(MOQ_TRACE_OBJECT_PHASE_TRANSPORT_CALL);
+            trace_copy()->phase(MOQ_TRACE_OBJECT_PHASE_TRANSPORT_CALL);
       }
 #endif
       absl::Status write_status =
@@ -306,8 +284,8 @@ void OutgoingSubgroupStream::SendObjects() {
       transport_call.finish(write_status.ok()
                                 ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
                                 : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
-      if (trace_object().has_value()) {
-        trace_object()->set_stream_offset_end(stream().WriteOffset());
+      if (trace_copy().has_value()) {
+        trace_copy()->set_stream_offset_end(stream().WriteOffset());
       }
       write_phase.finish(write_status.ok() ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
                                          : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
@@ -318,7 +296,7 @@ void OutgoingSubgroupStream::SendObjects() {
                "before; status: "
             << write_status;
 #if defined(QUICHE_MOQ_TRACE)
-        FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+        FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
 #endif
         stream().ResetWithUserCode(kResetCodeInternalError);
         return;
@@ -326,7 +304,7 @@ void OutgoingSubgroupStream::SendObjects() {
     } else {
       if (!WriteObjectToStream(*object, type_)) {
 #if defined(QUICHE_MOQ_TRACE)
-        FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
+        FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
 #endif
         stream().ResetWithUserCode(kResetCodeInternalError);
         // No class access below this line.
@@ -341,10 +319,7 @@ void OutgoingSubgroupStream::SendObjects() {
       return;
     }
 #if defined(QUICHE_MOQ_TRACE)
-    if (trace_object().has_value()) {
-      trace_object()->finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
-      trace_object().reset();
-    }
+    FinishTraceCopy(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
 #endif
     ++next_object_;
     already_delivered_ = 0;
@@ -356,12 +331,49 @@ void OutgoingSubgroupStream::SendObjects() {
 #if defined(QUICHE_MOQ_TRACE)
   // The loop also ends when no object is ready, so only a stream that stopped
   // accepting writes blocks the copy in progress.
-  if (trace_object().has_value() && !trace_blocked_since_ns_.has_value() &&
+  if (trace_copy().has_value() && !trace_blocked_since_ns_.has_value() &&
       !stream().CanWrite()) {
     trace_blocked_since_ns_ = quic_trace::now_ns();
   }
 #endif
 }
+
+#if defined(QUICHE_MOQ_TRACE)
+void OutgoingSubgroupStream::StartTraceCopy(
+    const PublishedObject& object, SubscriptionPublisherInterface& visitor,
+    uint64_t clone_start_ns) {
+  // An object the cache gave no logical identity has no inbound lifecycle for
+  // the copy to pair with, so the copy is not traced.
+  if (!object.metadata.trace_logical_id.has_value()) {
+    return;
+  }
+  moq_trace::ObjectContext context;
+  context.logical_id = *object.metadata.trace_logical_id;
+  context.identity =
+      moq_trace::ObjectIdentity{track_alias_, object.metadata.location.group,
+                                object.metadata.location.object};
+  context.direction = QUIC_TRACE_DIRECTION_TX;
+  context.session_id = visitor.TraceSessionId();
+  context.connection_id = visitor.TraceConnectionId();
+  context.stream_id = stream().GetStreamId();
+  context.stream_offset_start = stream().WriteOffset();
+  context.start_ns = clone_start_ns;
+  context.payload_bytes = object.metadata.payload_length;
+  trace_copy().emplace(context);
+  // The copy waited from the instant the cache made the object readable until
+  // this clone. Listeners run synchronously, so the wait includes delivering
+  // the object to subscribers notified before this one.
+  if (object.metadata.trace_ready_ns.has_value()) {
+    trace_copy()
+        ->phase_at(MOQ_TRACE_OBJECT_PHASE_DELIVERY_WAIT,
+                   *object.metadata.trace_ready_ns)
+        .finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, clone_start_ns);
+  }
+  trace_copy()
+      ->phase_at(MOQ_TRACE_OBJECT_PHASE_CLONE, clone_start_ns)
+      .finish(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS);
+}
+#endif
 
 void OutgoingSubgroupStream::Fin(Location last_object) {
   QUICHE_DCHECK_EQ(last_object.group, index_.group);
@@ -476,20 +488,14 @@ void OutgoingFetchStream::OnStopSendingReceived(
 void IncomingDataStream::OnResetStreamReceived(webtransport::StreamErrorCode) {
 #if defined(QUICHE_MOQ_TRACE)
   // The publisher reset the stream before the object in progress arrived.
-  if (trace_object_.has_value()) {
-    trace_object_->finish(MOQ_TRACE_OBJECT_OUTCOME_RESET);
-    trace_object_.reset();
-  }
+  FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_RESET);
 #endif
 }
 
 IncomingDataStream::~IncomingDataStream() {
 #if defined(QUICHE_MOQ_TRACE)
   // The stream is going away before the object in progress arrived.
-  if (trace_object_.has_value()) {
-    trace_object_->finish(MOQ_TRACE_OBJECT_OUTCOME_RESET);
-    trace_object_.reset();
-  }
+  FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_RESET);
 #endif
   QUICHE_DVLOG(1) << "Destroying incoming data stream "
                   << stream_->GetStreamId();
@@ -621,8 +627,9 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
 #if defined(QUICHE_MOQ_TRACE)
       StartTraceObject(metadata);
       if (store_start_ns.has_value()) {
-        TraceFragmentStored(metadata, *store_start_ns,
-                            /*first_fragment=*/bytes_received_this_object_ == 0);
+        TraceObjectFragment(
+            metadata, *store_start_ns,
+            /*first_fragment=*/bytes_received_this_object_ == 0);
       }
 #endif
     }
@@ -699,7 +706,7 @@ void IncomingDataStream::StartTraceObject(
 // fragment never reports both. Storage ends where the relay cache starts
 // notifying listeners. That fan-out is Notify, minus the copies the listeners
 // write inside it, which belong to their outbound lifecycles.
-void IncomingDataStream::TraceFragmentStored(
+void IncomingDataStream::TraceObjectFragment(
     const PublishedObjectMetadata& metadata, uint64_t store_start_ns,
     bool first_fragment) {
   const std::optional<uint64_t> fan_out_start_ns =
@@ -746,11 +753,17 @@ void IncomingDataStream::OnObjectPayloadConsumed(size_t,
     trace_payload_start_ns_.reset();
   }
   if (end_of_message) {
-    trace_object_->finish(trace_fragment_succeeded_
-                              ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
-                              : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
-    trace_object_.reset();
+    FinishTraceObject(trace_fragment_succeeded_
+                          ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
+                          : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
     trace_header_.reset();
+  }
+}
+
+void IncomingDataStream::FinishTraceObject(moq_trace_object_outcome outcome) {
+  if (trace_object_.has_value()) {
+    trace_object_->finish(outcome);
+    trace_object_.reset();
   }
 }
 #endif
@@ -845,8 +858,7 @@ void IncomingDataStream::OnParsingError(MoqtError error_code,
 #if defined(QUICHE_MOQ_TRACE)
   if (trace_object_.has_value()) {
     trace_object_->set_stream_offset_end(stream_->ReadOffset());
-    trace_object_->finish(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
-    trace_object_.reset();
+    FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
   }
   trace_payload_start_ns_.reset();
   trace_header_.reset();
