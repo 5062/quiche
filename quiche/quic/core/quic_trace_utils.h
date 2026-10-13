@@ -12,6 +12,15 @@
 
 namespace quic {
 
+// The connection whose packet is being written on this thread, if any.
+//
+// QuicConnection::SendPacketToWriter sets it around a write to a writer that
+// sends at once, so the socket wrapper's TX udp_socket event names the
+// connection, as mvfst's and Quinn's do. A batch writer can flush several
+// connections' packets in one call, and a send made outside a connection, such
+// as the dispatcher's stateless reply, names none.
+inline thread_local std::optional<uint64_t> quic_trace_send_connection_id;
+
 // Describe one end of a connection path for `quic_connection_path`. An
 // uninitialized address, such as a wildcard the stack never resolved, is
 // recorded as the unspecified IPv6 address with its port.

@@ -42,11 +42,13 @@ code:
 | Call site | Emission |
 | --- | --- |
 | `QuicConnection::OnPacket`, `QuicConnection::FinishQuicTracePacket` | RX packet start at the completion of the receive system call that returned its datagram, a `read_queue` phase until processing begins, and the end with its outcome; early framer returns close before processing another packet |
-| `QuicConnection` public header, header unprotect, payload decrypt, frame processing | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, `frame_process` |
+| `QuicConnection` public header, header unprotect, payload decrypt, `UpdatePacketContent` | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, and one `frame_process` per frame other than padding, from the frame callback after the framer decodes it until the next frame is decoded or the packet ends |
 | `QuicStreamSequencer::OnFrameData`, `QuicConnection::OnStreamFrame` | STREAM frame byte range, stamped when the receive buffer accepted its bytes and before the stream is told; `dropped` for a frame the session or stream discarded |
 | `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start, phases `frame_encode` and `packet_encrypt`, then a `send_queue` phase |
 | `QuicConnection::WritePacket`, `FlushCoalescedPacket`, `WriteQueuedPackets`, `WritePacketUsingWriter` | TX packet end at the completion of the send system call that accepted its datagram, or `dropped` when that send failed |
 | `QuicConnection::SendPacketToWriter` | `quic_connection_path` before the first send and whenever the addresses a connection sends between change |
+| `QuicConnection::CanWrite` | `quic_send_blocked` for the first of amplification, pacing, and the congestion window that keeps data from being sent |
+| `QuicStream::WriteBufferedData`, `QuicStream::CanWriteNewData` | per stream `quic_send_blocked` while stream or connection flow control holds the stream's buffered data, and while the send buffer refuses new data |
 | `QuicUdpSocketApi::ReadPacket`, `ReadMultiplePackets`, `WritePacket`, `QuicLinuxSocketUtils::WritePacket` and `WriteMultiplePackets` | UDP socket start and end around each system call, including batch flushes, with buffer, datagram, and byte counts; `ECONNRESET` records `connection_reset` |
 
 Packet lifecycles are bounded by the socket. The receive system call's
@@ -71,8 +73,21 @@ RX packet sizes describe individual encoded QUIC packets after the framer splits
 coalesced datagrams. TX socket events describe actual sends, so enqueueing a batch
 or flushing an empty batch emits nothing. GSO reports one buffer and the number
 of datagrams represented by its segments. Partial sendmmsg calls report only the
-accepted buffers and bytes. Socket events carry no connection ID because the
-same socket or batch can serve several connections.
+accepted buffers and bytes. RX socket events carry no connection ID because one
+socket serves several connections. A TX socket event names the connection whose
+packet a writer sends at once, as mvfst's and Quinn's do; a batch writer can
+flush several connections' packets in one call, so its sends name none. Socket
+events, and the stamp of a STREAM frame's acceptance, read no clock while
+nothing is traced.
+
+TX STREAM frames are recorded once their packet's frames are encoded, before
+encryption, as in mvfst and Quinn, and a frame without bytes covers no range.
+
+Packet outcomes match mvfst's and Quinn's. A packet whose frame closes the
+connection over an error ends `malformed`, one that carries the peer's
+CONNECTION_CLOSE ends `success`, and one the framer ignores ends `dropped`. A
+frame whose processing ends with an error leaves its `frame_process` phase
+abandoned.
 
 ## Synchronous delivery
 
@@ -92,9 +107,10 @@ of the phases that describe other layers:
   RX `application` packet phase. The scopes sit in the `WebTransportStreamAdapter`
   read and write callbacks and in `WebTransportHttp3::AssociateStream`, where
   MoQT accepts and reads a new stream. Nested callbacks extend one phase.
-- The RX `frame_process` phase ends when the first application scope opens, so
-  it covers QUIC and HTTP/3 frame handling only. Transport work that follows the
-  callback within the same frame is not measured.
+- A frame's `frame_process` phase ends when the first application scope opens,
+  so it covers QUIC and HTTP/3 frame handling only. Transport work that follows
+  the callback within the same frame is not measured, and the next frame starts
+  its own phase.
 - The RX packet lifecycle still ends in `OnPacketComplete`, so `rx_packet_span`
   includes the synchronous application work. `rx_packet_transport_span`
   subtracts the `application` phases and is the figure to compare with Quinn,

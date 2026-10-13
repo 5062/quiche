@@ -1653,6 +1653,10 @@ class QUICHE_EXPORT QuicConnection
   bool ProcessPacket(const QuicEncryptedPacket& packet);
 #if defined(QUICHE_MOQ_TRACE)
   void FinishQuicTracePacket(quic_trace_packet_outcome outcome);
+  // Ends the previous frame's frame_process phase and starts one for the
+  // frame of `type` the framer just decoded, unless it is padding. Every frame
+  // callback reaches UpdatePacketContent first, which calls this.
+  void QuicTraceStartFrame(QuicFrameType type);
 #endif
   friend class test::QuicConnectionPeer;
 
@@ -2552,6 +2556,8 @@ class QUICHE_EXPORT QuicConnection
   int quic_trace_application_depth_ = 0;
   size_t quic_trace_rx_packet_length_ = 0;
   bool quic_trace_rx_control_packet_ = false;
+  // Whether the packet being processed carried the peer's CONNECTION_CLOSE.
+  bool quic_trace_rx_peer_closed_ = false;
   // The traced packets coalesced into |coalesced_packet_|, which end when the
   // coalesced datagram is sent.
   quic_trace::PendingSend quic_trace_coalesced_;

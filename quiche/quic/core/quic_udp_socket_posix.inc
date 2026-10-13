@@ -325,19 +325,16 @@ void QuicUdpSocketApi::ReadPacket(
 #if defined(QUICHE_MOQ_TRACE)
   // One receive system call is one socket operation, and the instant it
   // returns starts the lifecycle of every packet it delivered.
-  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
+  quic_trace::SocketCall trace_call(QUIC_TRACE_DIRECTION_RX);
 #endif
   int bytes_read = recvmsg(fd, &hdr, flags);
 #if defined(QUICHE_MOQ_TRACE)
-  const uint64_t read_ns = quic_trace::now_ns();
+  const std::optional<uint64_t> read_ns = trace_call.returned();
   if (bytes_read < 0) {
-    const int read_error = errno;
-    trace_socket.finish_at(quic_trace::socket_outcome(read_error), {}, read_ns);
-    errno = read_error;
+    trace_call.failed(errno);
   } else {
-    result->quic_trace_read_ns = read_ns;
-    trace_socket.finish_at(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS,
-                           {1, 1, static_cast<uint64_t>(bytes_read)}, read_ns);
+    result->quic_trace_read_ns = read_ns.value_or(0);
+    trace_call.succeeded(quic_trace::SocketStats::buffer(bytes_read));
   }
 #endif
   if (bytes_read < 0) {
@@ -437,26 +434,21 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
     // If MSG_TRUNC is set on Linux, recvmmsg will return the real packet size
     // in |hdrs[i].msg_len| even if packet buffer is too small to receive it.
 #if defined(QUICHE_MOQ_TRACE)
-    quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_RX);
+    quic_trace::SocketCall trace_call(QUIC_TRACE_DIRECTION_RX);
 #endif
     int packets_read = recvmmsg(fd, hdrs, results->size(), MSG_TRUNC, nullptr);
 #if defined(QUICHE_MOQ_TRACE)
     // Every result this call filled shares the instant it returned.
-    const uint64_t read_ns = quic_trace::now_ns();
+    const std::optional<uint64_t> read_ns = trace_call.returned();
     if (packets_read < 0) {
-      const int read_error = errno;
-      trace_socket.finish_at(quic_trace::socket_outcome(read_error), {}, read_ns);
-      errno = read_error;
+      trace_call.failed(errno);
     } else {
       quic_trace::SocketStats trace_stats;
-      trace_stats.buffers = packets_read;
-      trace_stats.datagrams = packets_read;
       for (int i = 0; i < packets_read; ++i) {
-        trace_stats.bytes += hdrs[i].msg_len;
-        (*results)[i].quic_trace_read_ns = read_ns;
+        trace_stats += quic_trace::SocketStats::buffer(hdrs[i].msg_len);
+        (*results)[i].quic_trace_read_ns = read_ns.value_or(0);
       }
-      trace_socket.finish_at(QUIC_TRACE_SOCKET_OUTCOME_SUCCESS, trace_stats,
-                             read_ns);
+      trace_call.succeeded(trace_stats);
     }
 #endif
     if (packets_read <= 0) {
@@ -628,7 +620,8 @@ WriteResult QuicUdpSocketApi::WritePacket(
 
   int rc;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX);
+  quic_trace::SocketCall trace_call(QUIC_TRACE_DIRECTION_TX,
+                                    quic_trace_send_connection_id);
 #endif
   do {
     rc = sendmsg(fd, &hdr, 0);
@@ -636,18 +629,11 @@ WriteResult QuicUdpSocketApi::WritePacket(
 #if defined(QUICHE_MOQ_TRACE)
   // The instant the send returns ends this socket operation and, through the
   // result, every packet the datagram carried.
-  const uint64_t sent_ns = quic_trace::now_ns();
-  const int write_error = rc < 0 ? errno : 0;
-  quic_trace::SocketStats trace_stats;
+  const std::optional<uint64_t> sent_ns = trace_call.returned();
   if (rc >= 0) {
-    trace_stats.buffers = 1;
-    trace_stats.datagrams = 1;
-    trace_stats.bytes = rc;
-  }
-  trace_socket.finish_at(quic_trace::socket_outcome(write_error), trace_stats,
-                         sent_ns);
-  if (rc < 0) {
-    errno = write_error;
+    trace_call.succeeded(quic_trace::SocketStats::buffer(rc));
+  } else {
+    trace_call.failed(errno);
   }
 #endif
   WriteResult result =
@@ -657,7 +643,7 @@ WriteResult QuicUdpSocketApi::WritePacket(
                                 : WRITE_STATUS_ERROR,
                             errno);
 #if defined(QUICHE_MOQ_TRACE)
-  result.quic_trace_sent_ns = sent_ns;
+  result.quic_trace_sent_ns = sent_ns.value_or(0);
 #endif
   return result;
 }

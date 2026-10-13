@@ -757,6 +757,14 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
 
 #if defined(QUICHE_MOQ_TRACE)
   trace_encode.finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  // A STREAM frame is recorded once its packet's frames are encoded, before
+  // encryption, as mvfst and Quinn record it.
+  if (frame.data_length != 0) {
+    trace_packet.stream_frame(frame.stream_id, frame.offset,
+                              frame.offset + frame.data_length,
+                              QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
+                              transmission_type != NOT_RETRANSMISSION);
+  }
   auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
 
@@ -793,10 +801,6 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
 #if defined(QUICHE_MOQ_TRACE)
   trace_encrypt.finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
   trace_packet.set_byte_len(encrypted_length);
-  trace_packet.stream_frame(frame.stream_id, frame.offset,
-                            frame.offset + frame.data_length,
-                            QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
-                            transmission_type != NOT_RETRANSMISSION);
   // The packet ends when the send carrying it returns, so it travels with
   // its bytes until then.
   packet_.quic_trace_send.add(std::move(trace_packet));
@@ -1013,6 +1017,10 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   }
 #if defined(QUICHE_MOQ_TRACE)
   trace_encode.finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+  // STREAM frames are recorded before encryption, as mvfst and Quinn record
+  // them.
+  TraceStreamFrames(trace_packet, queued_frames_,
+                    quic_trace_queued_retransmissions_);
   auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
   const size_t encrypted_length = framer_->EncryptInPlace(
@@ -1038,8 +1046,6 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
 #if defined(QUICHE_MOQ_TRACE)
   trace_encrypt.finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
   trace_packet.set_byte_len(packet_.encrypted_length);
-  TraceStreamFrames(trace_packet, queued_frames_,
-                    quic_trace_queued_retransmissions_);
   // The packet ends when the send carrying it returns, so it travels with
   // its bytes until then.
   packet_.quic_trace_send.add(std::move(trace_packet));

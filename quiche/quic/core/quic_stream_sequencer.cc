@@ -105,8 +105,11 @@ void QuicStreamSequencer::OnFrameData(QuicStreamOffset byte_offset,
 #if defined(QUICHE_MOQ_TRACE)
   // The buffer holds the frame's bytes now, and nothing has told the stream,
   // so this is the instant the frame was accepted. Duplicate bytes the buffer
-  // already held count as accepted.
-  stream_->OnQuicTraceDataAccepted(quic_trace::now_ns());
+  // already held count as accepted. Nothing reads the clock while untraced.
+  if (const std::optional<uint64_t> accepted_ns =
+          quic_trace::now_ns_if_enabled()) {
+    stream_->OnQuicTraceDataAccepted(*accepted_ns);
+  }
 #endif
 
   if (bytes_written == 0) {

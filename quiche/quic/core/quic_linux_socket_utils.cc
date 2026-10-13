@@ -26,20 +26,19 @@ namespace quic {
 #if defined(QUICHE_MOQ_TRACE)
 namespace {
 
-// A GSO buffer represents several UDP datagrams, including its shorter tail.
-uint64_t QuicTraceDatagrams(msghdr header, size_t bytes) {
+// Measure one sent buffer, which GSO splits into datagrams of the segment
+// size its control message names, including a shorter tail.
+quic_trace::SocketStats QuicTraceBuffer(msghdr header, size_t bytes) {
   for (cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != nullptr;
        cmsg = CMSG_NXTHDR(&header, cmsg)) {
     if (cmsg->cmsg_level == SOL_UDP && cmsg->cmsg_type == UDP_SEGMENT &&
         cmsg->cmsg_len >= CMSG_LEN(sizeof(uint16_t))) {
       uint16_t segment_size;
       memcpy(&segment_size, CMSG_DATA(cmsg), sizeof(segment_size));
-      if (segment_size != 0) {
-        return bytes / segment_size + (bytes % segment_size != 0);
-      }
+      return quic_trace::SocketStats::buffer(bytes, segment_size);
     }
   }
-  return 1;
+  return quic_trace::SocketStats::buffer(bytes);
 }
 
 }  // namespace
@@ -292,40 +291,46 @@ WriteResult QuicLinuxSocketUtils::WritePacket(int fd, const QuicMsgHdr& hdr,
                                               bool enobufs_blocked) {
   int rc;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX);
+  quic_trace::SocketCall trace_call(QUIC_TRACE_DIRECTION_TX,
+                                    quic_trace_send_connection_id);
 #endif
   do {
     rc = GetGlobalSyscallWrapper()->Sendmsg(fd, hdr.hdr(), 0);
   } while (rc < 0 && errno == EINTR);
 #if defined(QUICHE_MOQ_TRACE)
-  const int write_error = rc < 0 ? errno : 0;
-  quic_trace::SocketStats trace_stats;
+  // The instant the send returns also ends the packets the buffer carried.
+  const uint64_t sent_ns = trace_call.returned().value_or(0);
   if (rc >= 0) {
-    trace_stats.buffers = 1;
-    trace_stats.datagrams = QuicTraceDatagrams(*hdr.hdr(), rc);
-    trace_stats.bytes = rc;
-  }
-  trace_socket.finish(quic_trace::socket_outcome(write_error),
-                      trace_stats);
-  if (rc < 0) {
-    errno = write_error;
+    trace_call.succeeded(QuicTraceBuffer(*hdr.hdr(), rc));
+  } else {
+    trace_call.failed(errno);
   }
 #endif
+#if defined(QUICHE_MOQ_TRACE)
+  // Every result carries the instant the send returned, so the packets it
+  // carried end there whether it was accepted or failed.
+  const auto stamp = [sent_ns](WriteResult result) {
+    result.quic_trace_sent_ns = sent_ns;
+    return result;
+  };
+#else
+  const auto stamp = [](WriteResult result) { return result; };
+#endif
   if (rc >= 0) {
-    return WriteResult(WRITE_STATUS_OK, rc);
+    return stamp(WriteResult(WRITE_STATUS_OK, rc));
   }
   if (errno == ENOBUFS) {
     QUIC_CODE_COUNT(quic_sendmsg_enobufs);
     if (enobufs_blocked) {
-      return WriteResult(WRITE_STATUS_BLOCKED, errno);
+      return stamp(WriteResult(WRITE_STATUS_BLOCKED, errno));
     } else {
       errno = ENOBUFS;
     }
   }
-  return WriteResult((errno == EAGAIN || errno == EWOULDBLOCK)
-                         ? WRITE_STATUS_BLOCKED
-                         : WRITE_STATUS_ERROR,
-                     errno);
+  return stamp(WriteResult((errno == EAGAIN || errno == EWOULDBLOCK)
+                               ? WRITE_STATUS_BLOCKED
+                               : WRITE_STATUS_ERROR,
+                           errno));
 }
 
 // static
@@ -340,7 +345,8 @@ WriteResult QuicLinuxSocketUtils::WriteMultiplePackets(int fd,
 
   int rc;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::Socket trace_socket(QUIC_TRACE_DIRECTION_TX);
+  quic_trace::SocketCall trace_call(QUIC_TRACE_DIRECTION_TX,
+                                    quic_trace_send_connection_id);
 #endif
   do {
     rc = GetGlobalSyscallWrapper()->Sendmmsg(fd, mhdr->mhdr(), mhdr->num_msgs(),
@@ -348,26 +354,35 @@ WriteResult QuicLinuxSocketUtils::WriteMultiplePackets(int fd,
   } while (rc < 0 && errno == EINTR);
 
 #if defined(QUICHE_MOQ_TRACE)
-  const int write_error = rc > 0 ? 0 : (rc == 0 ? EIO : errno);
-  quic_trace::SocketStats trace_stats;
+  // The instant the send returns also ends the packets the buffers carried.
+  const uint64_t sent_ns = trace_call.returned().value_or(0);
   if (rc > 0) {
-    trace_stats.buffers = rc;
+    quic_trace::SocketStats trace_stats;
     for (int i = 0; i < rc; ++i) {
-      trace_stats.datagrams +=
-          QuicTraceDatagrams(mhdr->mhdr()[i].msg_hdr, mhdr->mhdr()[i].msg_len);
+      trace_stats += QuicTraceBuffer(mhdr->mhdr()[i].msg_hdr,
+                                     mhdr->mhdr()[i].msg_len);
     }
-    trace_stats.bytes = mhdr->num_bytes_sent(rc);
+    trace_call.succeeded(trace_stats);
+  } else {
+    // sendmmsg returning 0 accepted nothing, which the stack treats as EIO.
+    trace_call.failed(rc == 0 ? EIO : errno);
   }
-  trace_socket.finish(quic_trace::socket_outcome(write_error), trace_stats);
-  if (rc <= 0) {
-    errno = write_error;
-  }
+#endif
+#if defined(QUICHE_MOQ_TRACE)
+  // Every result carries the instant the send returned, so the packets it
+  // carried end there whether it was accepted or failed.
+  const auto stamp = [sent_ns](WriteResult result) {
+    result.quic_trace_sent_ns = sent_ns;
+    return result;
+  };
+#else
+  const auto stamp = [](WriteResult result) { return result; };
 #endif
 
   if (rc > 0) {
     *num_packets_sent = rc;
 
-    return WriteResult(WRITE_STATUS_OK, mhdr->num_bytes_sent(rc));
+    return stamp(WriteResult(WRITE_STATUS_OK, mhdr->num_bytes_sent(rc)));
   } else if (rc == 0) {
     QUIC_BUG(quic_bug_10598_3)
         << "sendmmsg returned 0, returning WRITE_STATUS_ERROR. errno: "
@@ -375,10 +390,10 @@ WriteResult QuicLinuxSocketUtils::WriteMultiplePackets(int fd,
     errno = EIO;
   }
 
-  return WriteResult((errno == EAGAIN || errno == EWOULDBLOCK)
-                         ? WRITE_STATUS_BLOCKED
-                         : WRITE_STATUS_ERROR,
-                     errno);
+  return stamp(WriteResult((errno == EAGAIN || errno == EWOULDBLOCK)
+                               ? WRITE_STATUS_BLOCKED
+                               : WRITE_STATUS_ERROR,
+                           errno));
 }
 
 }  // namespace quic

@@ -18,6 +18,8 @@ def check_trace(path: pathlib.Path) -> None:
     # contract. Each records (start, end) per packet.
     queues = collections.defaultdict(list)
     phase_names = {}
+    # Packet phase 5 is frame_process, which each processed frame records.
+    frame_phases = 0
     outcomes = {}
     paths = 0
     for message in bt2.TraceCollectionMessageIterator(str(path)):
@@ -68,6 +70,8 @@ def check_trace(path: pathlib.Path) -> None:
                 end_ns = int(fields["timestamp_ns"])
                 assert end_ns >= start_ns
                 phase = phase_names.pop(phase_key)
+                if phase == 5:
+                    frame_phases += 1
                 if phase in (9, 10):
                     queues[key].append((phase, start_ns, end_ns))
 
@@ -93,6 +97,7 @@ def check_trace(path: pathlib.Path) -> None:
         checked += 1
     assert checked > 0, "no successful packet was checked for its queue phase"
     assert paths > 0, "no connection path was recorded"
+    assert frame_phases > 0, "no frame recorded a frame_process phase"
     assert dropped_rx > 0, "duplicate packet fixture emitted no dropped RX packet"
     # Outcome 0 is success and 2 is would_block in the current provider contract.
     expected = collections.Counter(

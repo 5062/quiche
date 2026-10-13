@@ -849,14 +849,19 @@ bool QuicConnection::ProcessPacket(const QuicEncryptedPacket& packet) {
   const bool processed = framer_.ProcessPacket(packet);
 #if defined(QUICHE_MOQ_TRACE)
   // OnPacketComplete and OnError normally finish the lifecycle. A successful
-  // framer return can also mean an ignored header or a handled control packet.
+  // framer return can also mean a handled control packet, a frame that
+  // stopped processing, or an ignored header. As in mvfst and Quinn, a packet
+  // whose frame closed the connection over an error is malformed, one that
+  // carried the peer's close succeeded, and an ignored one was dropped.
   quic_trace_packet_outcome outcome = QUIC_TRACE_PACKET_OUTCOME_DROPPED;
   if (!processed) {
     outcome = framer_.error() == QUIC_DECRYPTION_FAILURE
                   ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
                   : QUIC_TRACE_PACKET_OUTCOME_MALFORMED;
-  } else if (quic_trace_rx_control_packet_) {
+  } else if (quic_trace_rx_control_packet_ || quic_trace_rx_peer_closed_) {
     outcome = QUIC_TRACE_PACKET_OUTCOME_SUCCESS;
+  } else if (!connected_) {
+    outcome = QUIC_TRACE_PACKET_OUTCOME_MALFORMED;
   }
   FinishQuicTracePacket(outcome);
 #endif
@@ -868,6 +873,7 @@ void QuicConnection::OnPacket() {
 #if defined(QUICHE_MOQ_TRACE)
   FinishQuicTracePacket(QUIC_TRACE_PACKET_OUTCOME_ABANDONED);
   quic_trace_rx_control_packet_ = false;
+  quic_trace_rx_peer_closed_ = false;
   // A packet's lifecycle starts when the read that returned its datagram
   // completed. A packet that came from no traced read, such as one a test
   // builds, cannot start there, so it gets no trace rather than a later start.
@@ -1630,22 +1636,10 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
   // all frames.
   MaybeUpdateAckTimeout();
 #if defined(QUICHE_MOQ_TRACE)
-  if (quic_trace_rx_packet_.has_value()) {
-    quic_trace_rx_frame_process_.emplace(
-        quic_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
-  }
   quic_trace_stream_frame_accepted_ns_.reset();
 #endif
   visitor_->OnStreamFrame(frame);
 #if defined(QUICHE_MOQ_TRACE)
-  const quic_trace_packet_outcome trace_outcome =
-      connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
-                 : QUIC_TRACE_PACKET_OUTCOME_DROPPED;
-  // Application delivery may already have ended the phase.
-  if (quic_trace_rx_frame_process_.has_value()) {
-    quic_trace_rx_frame_process_->finish(trace_outcome);
-    quic_trace_rx_frame_process_.reset();
-  }
   if (quic_trace_rx_packet_.has_value() && frame.data_length != 0) {
     // The frame's timestamp is when the stream's receive buffer accepted its
     // bytes, which the sequencer reported before any application callback. A
@@ -2056,6 +2050,11 @@ bool QuicConnection::OnConnectionCloseFrame(
   if (!UpdatePacketContent(CONNECTION_CLOSE_FRAME)) {
     return false;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  // The peer's close is processed in full, so the packet carrying it succeeds
+  // even though the connection stops processing it here.
+  quic_trace_rx_peer_closed_ = true;
+#endif
 
   if (debug_visitor_ != nullptr) {
     debug_visitor_->OnConnectionCloseFrame(frame);
@@ -2497,8 +2496,10 @@ bool QuicConnection::OnBlockedFrame(const QuicBlockedFrame& frame) {
 
 void QuicConnection::OnPacketComplete() {
 #if defined(QUICHE_MOQ_TRACE)
-  FinishQuicTracePacket(connected_ ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
-                                   : QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+  // A packet that closed the connection over an error is malformed.
+  FinishQuicTracePacket(connected_ || quic_trace_rx_peer_closed_
+                            ? QUIC_TRACE_PACKET_OUTCOME_SUCCESS
+                            : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
 #endif
   // Don't do anything if this packet closed the connection.
   if (!connected_) {
@@ -2577,13 +2578,29 @@ void QuicConnection::FinishQuicTraceWrite(quic_trace::PendingSend& send,
   }
 }
 
+void QuicConnection::QuicTraceStartFrame(QuicFrameType type) {
+  // The previous frame's processing ended when the framer decoded this one.
+  if (quic_trace_rx_frame_process_.has_value()) {
+    quic_trace_rx_frame_process_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
+    quic_trace_rx_frame_process_.reset();
+  }
+  if (quic_trace_rx_packet_.has_value() && type != PADDING_FRAME) {
+    quic_trace_rx_frame_process_.emplace(
+        quic_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
+  }
+}
+
 void QuicConnection::FinishQuicTracePacket(quic_trace_packet_outcome outcome) {
   if (quic_trace_rx_application_.has_value()) {
     quic_trace_rx_application_->finish(outcome);
     quic_trace_rx_application_.reset();
   }
+  // The last frame finished with its packet, and one that ended processing
+  // with an error leaves its phase abandoned, as in mvfst and Quinn.
   if (quic_trace_rx_frame_process_.has_value()) {
-    quic_trace_rx_frame_process_->finish(outcome);
+    if (outcome == QUIC_TRACE_PACKET_OUTCOME_SUCCESS) {
+      quic_trace_rx_frame_process_->finish(outcome);
+    }
     quic_trace_rx_frame_process_.reset();
   }
   if (quic_trace_rx_header_parse_.has_value()) {
@@ -4699,10 +4716,16 @@ WriteResult QuicConnection::SendPacketToWriter(
         QuicTracePathEndpoint(destination_address.host(),
                               destination_address.port()));
   }
+  if (!writer->IsBatchMode()) {
+    quic_trace_send_connection_id = quic_trace_connection_id_;
+  }
 #endif
   WriteResult result =
       writer->WritePacket(buffer, buf_len, self_address, destination_address,
                           per_packet_options_, params);
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace_send_connection_id.reset();
+#endif
   return result;
 }
 
@@ -6088,6 +6111,9 @@ void QuicConnection::CheckIfApplicationLimited() {
 }
 
 bool QuicConnection::UpdatePacketContent(QuicFrameType type) {
+#if defined(QUICHE_MOQ_TRACE)
+  QuicTraceStartFrame(type);
+#endif
   last_received_packet_info_.frames.push_back(type);
   if (version().IsIetfQuic()) {
     if (perspective_ == Perspective::IS_CLIENT) {
