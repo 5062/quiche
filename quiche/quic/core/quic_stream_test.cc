@@ -556,6 +556,25 @@ TEST_P(QuicStreamTest, WriteOrBufferDataReachStreamLimit) {
       "Write too many data via stream");
 }
 
+// The trace capture in moq_trace/test_trace.sh runs this test to record a
+// stream whose buffered data waits for connection flow control.
+TEST_P(QuicStreamTest, ConnectionFlowControlHoldsBufferedData) {
+  Initialize();
+  QuicFlowControllerPeer::SetSendWindowOffset(session_->flow_controller(), 0);
+  std::string data(100, 'a');
+  EXPECT_CALL(*session_, WritevData(_, _, _, _, _, _)).Times(0);
+  stream_->WriteOrBufferData(data, false, nullptr);
+  EXPECT_EQ(data.length(), stream_->BufferedDataBytes());
+
+  QuicFlowControllerPeer::SetSendWindowOffset(
+      session_->flow_controller(), kInitialSessionFlowControlWindowForTest);
+  EXPECT_CALL(*session_, WritevData(_, _, _, _, _, _))
+      .WillOnce(Invoke(session_.get(), &MockQuicSession::ConsumeData));
+  EXPECT_CALL(*stream_, OnCanWriteNewData());
+  stream_->OnCanWrite();
+  EXPECT_FALSE(stream_->HasBufferedData());
+}
+
 TEST_P(QuicStreamTest, ConnectionCloseAfterStreamClose) {
   Initialize();
 

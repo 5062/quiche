@@ -51,44 +51,50 @@ code:
 | `QuicStream::WriteBufferedData`, `QuicStream::CanWriteNewData` | per stream `quic_send_blocked` while stream or connection flow control holds the stream's buffered data, and while the send buffer refuses new data |
 | `QuicUdpSocketApi::ReadPacket`, `ReadMultiplePackets`, `WritePacket`, `QuicLinuxSocketUtils::WritePacket` and `WriteMultiplePackets` | UDP socket start and end around each system call, including batch flushes, with buffer, datagram, and byte counts; `ECONNRESET` records `connection_reset` |
 
-Packet lifecycles are bounded by the socket. The receive system call's
-completion travels with each packet on `QuicReceivedPacket`, which `Clone()`
-preserves for the dispatcher's buffered packet store, and then on
-`ReceivedPacketInfo`, which the connection keeps for coalesced packets and
-restores for undecryptable packets it replays, so every packet starts at its
-own read. A packet that came from no traced read, such as one a test builds,
-gets no trace. Neither does a packet the dispatcher builds without a
-connection, such as its Initial ACK for buffered packets or a stateless
-connection close; its send still appears as a socket event. A TX packet waits
-in the toolkit's `quic_trace::PendingSend`, which travels with its bytes through
-the coalescer and the write-blocked queue, and ends at the `WriteResult` of the
-send that carried it. A batch writer reports no traced
-send for the packets it only buffered, so those record abandonment; the relay
-uses `QuicDefaultPacketWriter`, which sends each packet at once.
+## Boundaries
 
-No sampling is applied. Analysis selects the packets that carry the objects it
-measures.
-
-RX packet sizes describe individual encoded QUIC packets after the framer splits
-coalesced datagrams. TX socket events describe actual sends, so enqueueing a batch
-or flushing an empty batch emits nothing. GSO reports one buffer and the number
-of datagrams represented by its segments. Partial sendmmsg calls report only the
-accepted buffers and bytes. RX socket events carry no connection ID because one
-socket serves several connections. A TX socket event names the connection whose
-packet a writer sends at once, as mvfst's and Quinn's do; a batch writer can
-flush several connections' packets in one call, so its sends name none. Socket
-events, and the stamp of a STREAM frame's acceptance, read no clock while
-nothing is traced.
-
-TX STREAM frames are recorded once their packet's frames are encoded, before
-encryption, as in mvfst and Quinn, and a frame without bytes covers no range.
-
-Packet outcomes match mvfst's and Quinn's. A packet whose frame closes the
-connection over an error ends `malformed`, one that carries the peer's
-CONNECTION_CLOSE, a stateless reset, or a version negotiation ends `success`,
-and one the framer ignores or that arrives before its keys ends `dropped`. A
-frame whose processing ends with an error leaves its `frame_process` phase
-abandoned.
+- **Read path.** An RX packet starts at the completion of the receive system
+  call that returned its datagram. That instant travels on `QuicReceivedPacket`,
+  which `Clone()` preserves for the dispatcher's buffered packet store, and then
+  on `ReceivedPacketInfo`, which the connection keeps for coalesced packets and
+  restores for undecryptable packets it replays, so every packet starts at its
+  own read. A packet that came from no traced read, such as one a test builds,
+  gets no trace. Neither does a packet the dispatcher builds without a
+  connection, such as its Initial ACK for buffered packets or a stateless
+  connection close; its send still appears as a socket event. RX packet sizes
+  describe individual encoded packets after the framer splits coalesced
+  datagrams.
+- **Sends.** A TX packet waits in the toolkit's `quic_trace::PendingSend`, which
+  travels with its bytes through the coalescer and the write-blocked queue, and
+  ends at the `WriteResult` of the send that carried it. A send that would block
+  keeps its packets waiting for the retry, and a failed send ends them
+  `dropped`. A batch writer reports no traced send for the packets it only
+  buffered, so those record abandonment; the relay uses
+  `QuicDefaultPacketWriter`, which sends each packet at once.
+- **Sockets.** TX socket events describe actual sends, so enqueueing a batch or
+  flushing an empty batch emits nothing. GSO reports one buffer and the number of
+  datagrams its segments represent, and a partial `sendmmsg` reports only the
+  accepted buffers and bytes. RX socket events carry no connection ID because
+  one socket serves several connections. A TX socket event names the connection
+  whose packet a writer sends at once, as mvfst's and Quinn's do; a batch writer
+  can flush several connections' packets in one call, so its sends name none.
+  Socket events, and the stamp of a STREAM frame's acceptance, read no clock
+  while nothing is traced.
+- **STREAM frames.** TX STREAM frames are recorded once their packet's frames are
+  encoded, before encryption, as in mvfst and Quinn, and a frame without bytes
+  covers no range.
+- **Packet outcomes.** These match mvfst's and Quinn's. A packet whose frame
+  closes the connection over an error ends `malformed`, one that carries the
+  peer's CONNECTION_CLOSE, a stateless reset, or a version negotiation ends
+  `success`, and one the framer ignores or that arrives before its keys ends
+  `dropped`. A frame whose processing ends with an error leaves its
+  `frame_process` phase abandoned.
+- **Send-blocked intervals.** The transmit reasons are evaluated at each
+  `CanWrite` for data, so an interval ends at the first check after the limit
+  lifts, and only the first limit that holds is recorded. A blocked write records
+  its interval on its stream, with the stream ID, as in mvfst and Quinn.
+- **Sampling.** None is applied. Analysis selects the packets that carry the
+  objects it measures.
 
 ## Synchronous delivery
 
@@ -134,7 +140,7 @@ of the phases that describe other layers:
   objects through STREAM byte ranges and there is no QUIC DATAGRAM frame event, so
   only streamed subgroup objects are measured.
 
-## Build integration
+## Build
 
 The hooks compile behind `QUICHE_MOQ_TRACE` and need the C++ facade headers and
 the two provider archives from `moq-trace`. Bazel cannot depend on a path outside
@@ -219,16 +225,20 @@ inbound object has exactly one outbound copy per subscriber. Exact event and
 coverage counts vary with run timing, so the command validates the correlation
 contract instead of comparing stale archived counts.
 
-`test_trace.sh` captures duplicate and coalesced packet fixtures plus GSO and
-sendmmsg fixtures, then checks the actual provider events. It requires LTTng and
-Python's Babeltrace 2 bindings, and leaves the trace and fixture logs under
-`moq_trace/artifacts/test-trace.*`. The checks require balanced packet and phase
-boundaries, dropped duplicate outcomes, and exact buffer, datagram, and byte
-counts for a GSO tail, an external batch flush, and a partial write followed by
-would-block and retry.
+`test_trace.sh` runs duplicate and coalesced packet fixtures, the stream tests,
+and GSO and sendmmsg fixtures under LTTng, and checks the events with the
+toolkit's `moq-trace verify`, as the mvfst and Quinn forks check theirs. Besides
+balanced lifecycles and phases, queue phases on their socket boundaries, and no
+abandoned packet, it requires a dropped duplicate, a per-stream send-blocked
+interval for stream flow control, connection flow control, and the send buffer,
+and exact buffer, datagram, and byte counts for a GSO tail, an external batch
+flush, and a partial write followed by would-block and retry. It needs LTTng and
+the `moq-trace` command, which the moq-trace development shell provides, and
+leaves the trace and fixture logs under `moq_trace/artifacts/test-trace.*`. From
+the moq-workspace, `just test-trace` runs it with the other stacks' checks.
 
 `//quiche:quiche_linux_tests` contains only the GSO and sendmmsg fixtures used by
-the capture checker.
+the capture check.
 
 The ordinary configuration keeps the standard suite green: with the macro off,
 the `//quiche:moqt_*_test` targets pass, and the built relay exports neither
