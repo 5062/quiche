@@ -128,14 +128,11 @@ the execution root, so they arrive through `--cxxopt`, `--linkopt`, and
 moq_trace/build.sh                         # traced build of //quiche:moqt_relay
 TRACE=0 moq_trace/build.sh                 # same sources, hooks compiled out
 TRACE=0 moq_trace/test.sh                  # the MoQ test targets, hooks off
-moq-trace run moq_trace/experiment.toml --output moq_trace/artifacts/capture-1
 ```
 
 Run the scripts from an environment that supplies Clang, Bazelisk or Bazel, ICU,
-and the `moq_trace` pkg-config package. The experiment command additionally
-needs `moq-trace`, `moq-bench`, LTTng, Babeltrace 2, and OpenSSL. The scripts
-never enter or select a development shell or depend on the location of a
-`moq-trace` checkout.
+and the `moq_trace` pkg-config package. The scripts never enter or select a
+development shell or depend on the location of a `moq-trace` checkout.
 
 Options are collected wherever they appear and the first argument that names a
 directory is the worktree, so `moq_trace/test.sh . --jobs=8` tests this checkout
@@ -147,11 +144,11 @@ untraced configurations should both stay compiled: each run otherwise
 invalidates the other one's objects, and the alternate base leaves the workspace
 `bazel-*` symlinks pointing at the traced binary.
 
-The shared `moq-trace run` experiment runner requires a new output directory,
-starts the relay under LTTng, drives it with `moq-bench`, analyzes both
-providers, records provenance, and validates the workload. The checked-in TOML
-supplies Google QUICHE's relay arguments and readiness behavior while the runner
-owns process cleanup, certificate generation, capture, and analysis.
+Captures run from the moq-workspace that pins this fork, with
+`just bench --relay google-quiche` at its root. Its `profiles/google-quiche.toml`
+supplies Google QUICHE's relay arguments and readiness behavior, and the
+`moq-trace` runner owns process cleanup, certificate generation, capture, and
+analysis.
 
 Traced builds require Linux and LTTng-UST. A build without the macro compiles the
 modified sources with no trace code and no new link dependencies. Traced builds
@@ -195,8 +192,9 @@ moq_trace/test.sh
 TRACE=0 moq_trace/test.sh
 moq_trace/test.sh //quiche:quic_connection_test //quiche:quic_framer_test //quiche:quic_udp_socket_test //quiche:quiche_linux_tests
 moq_trace/test_trace.sh
-moq-trace run moq_trace/experiment.toml --output moq_trace/artifacts/capture-1
 ```
+
+and, from the moq-workspace root, `just bench --relay google-quiche`.
 
 The capture command is the acceptance check: the benchmark must complete without
 mismatches, both providers must decode, and the analyzer must confirm that every
