@@ -2600,6 +2600,9 @@ bool QuicFramer::ProcessFrameData(QuicDataReader* reader,
   }
   QUIC_DVLOG(2) << ENDPOINT << "Processing packet with header " << header;
   while (!reader->IsDoneReading()) {
+#if defined(QUICHE_MOQ_TRACE)
+    visitor_->OnQuicTraceFrameDecode();
+#endif
     uint8_t frame_type;
     if (!reader->ReadBytes(&frame_type, 1)) {
       set_detailed_error("Unable to read frame type.");
@@ -2862,6 +2865,9 @@ bool QuicFramer::ProcessIetfFrameData(QuicDataReader* reader,
 
   QUIC_DVLOG(2) << ENDPOINT << "Processing IETF packet with header " << header;
   while (!reader->IsDoneReading()) {
+#if defined(QUICHE_MOQ_TRACE)
+    visitor_->OnQuicTraceFrameDecode();
+#endif
     uint64_t frame_type;
     // Will be the number of bytes into which frame_type was encoded.
     size_t encoded_bytes = reader->BytesRemaining();

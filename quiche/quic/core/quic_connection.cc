@@ -829,9 +829,7 @@ QuicBandwidth QuicConnection::ApplicationDrivenPacingRate() const {
 
 void QuicConnection::OnError(QuicFramer* framer) {
 #if defined(QUICHE_MOQ_TRACE)
-  FinishQuicTracePacket(framer->error() == QUIC_DECRYPTION_FAILURE
-                            ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
-                            : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
+  FinishQuicTracePacket(QuicTraceFramerErrorOutcome());
 #endif
   // Packets that we can not or have not decrypted are dropped.
   // TODO(rch): add stats to measure this.
@@ -855,9 +853,7 @@ bool QuicConnection::ProcessPacket(const QuicEncryptedPacket& packet) {
   // carried the peer's close succeeded, and an ignored one was dropped.
   quic_trace_packet_outcome outcome = QUIC_TRACE_PACKET_OUTCOME_DROPPED;
   if (!processed) {
-    outcome = framer_.error() == QUIC_DECRYPTION_FAILURE
-                  ? QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED
-                  : QUIC_TRACE_PACKET_OUTCOME_MALFORMED;
+    outcome = QuicTraceFramerErrorOutcome();
   } else if (quic_trace_rx_control_packet_ || quic_trace_rx_peer_closed_) {
     outcome = QUIC_TRACE_PACKET_OUTCOME_SUCCESS;
   } else if (!connected_) {
@@ -874,6 +870,7 @@ void QuicConnection::OnPacket() {
   FinishQuicTracePacket(QUIC_TRACE_PACKET_OUTCOME_ABANDONED);
   quic_trace_rx_control_packet_ = false;
   quic_trace_rx_peer_closed_ = false;
+  quic_trace_rx_missing_key_ = false;
   // A packet's lifecycle starts when the read that returned its datagram
   // completed. A packet that came from no traced read, such as one a test
   // builds, cannot start there, so it gets no trace rather than a later start.
@@ -1650,9 +1647,12 @@ bool QuicConnection::OnStreamFrame(const QuicStreamFrame& frame) {
           QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
           *quic_trace_stream_frame_accepted_ns_);
     } else {
-      quic_trace_rx_packet_->stream_frame(frame.stream_id, frame.offset,
-                                          frame.offset + frame.data_length,
-                                          QUIC_TRACE_PACKET_OUTCOME_DROPPED);
+      // A frame whose processing closed the connection is malformed, as in
+      // mvfst and Quinn, and one the stream discarded was dropped.
+      quic_trace_rx_packet_->stream_frame(
+          frame.stream_id, frame.offset, frame.offset + frame.data_length,
+          connected_ ? QUIC_TRACE_PACKET_OUTCOME_DROPPED
+                     : QUIC_TRACE_PACKET_OUTCOME_MALFORMED);
     }
   }
   quic_trace_stream_frame_accepted_ns_.reset();
@@ -2543,11 +2543,7 @@ QuicConnection::QuicTraceApplicationScope::QuicTraceApplicationScope(
   if (connection_->quic_trace_application_depth_++ > 0) {
     return;
   }
-  if (connection_->quic_trace_rx_frame_process_.has_value()) {
-    connection_->quic_trace_rx_frame_process_->finish(
-        QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-    connection_->quic_trace_rx_frame_process_.reset();
-  }
+  connection_->QuicTraceFinishFrame();
   if (connection_->quic_trace_rx_packet_.has_value()) {
     connection_->quic_trace_rx_application_.emplace(
         connection_->quic_trace_rx_packet_->phase(
@@ -2578,12 +2574,29 @@ void QuicConnection::FinishQuicTraceWrite(quic_trace::PendingSend& send,
   }
 }
 
-void QuicConnection::QuicTraceStartFrame(QuicFrameType type) {
-  // The previous frame's processing ended when the framer decoded this one.
+void QuicConnection::OnQuicTraceFrameDecode() { QuicTraceFinishFrame(); }
+
+void QuicConnection::QuicTraceFinishFrame() {
   if (quic_trace_rx_frame_process_.has_value()) {
     quic_trace_rx_frame_process_->finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
     quic_trace_rx_frame_process_.reset();
   }
+}
+
+quic_trace_packet_outcome QuicConnection::QuicTraceFramerErrorOutcome() const {
+  // A packet whose keys have not arrived yet is dropped, as in mvfst and
+  // Quinn, and replayed with its original read once they do.
+  if (framer_.error() != QUIC_DECRYPTION_FAILURE) {
+    return QUIC_TRACE_PACKET_OUTCOME_MALFORMED;
+  }
+  return quic_trace_rx_missing_key_
+             ? QUIC_TRACE_PACKET_OUTCOME_DROPPED
+             : QUIC_TRACE_PACKET_OUTCOME_AUTHENTICATION_FAILED;
+}
+
+void QuicConnection::QuicTraceStartFrame(QuicFrameType type) {
+  // The framer ended the previous frame's phase before decoding this one.
+  QuicTraceFinishFrame();
   if (quic_trace_rx_packet_.has_value() && type != PADDING_FRAME) {
     quic_trace_rx_frame_process_.emplace(
         quic_trace_rx_packet_->phase(QUIC_TRACE_PACKET_PHASE_FRAME_PROCESS));
@@ -2987,6 +3000,9 @@ void QuicConnection::OnUndecryptablePacket(const QuicEncryptedPacket& packet,
                 << " while connection is at encryption level "
                 << encryption_level_;
   QUICHE_DCHECK(EncryptionLevelIsValid(decryption_level));
+#if defined(QUICHE_MOQ_TRACE)
+  quic_trace_rx_missing_key_ = !has_decryption_key;
+#endif
   if (encryption_level_ != ENCRYPTION_FORWARD_SECURE) {
     ++stats_.undecryptable_packets_received_before_handshake_complete;
   }

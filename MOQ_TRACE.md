@@ -42,8 +42,8 @@ code:
 | Call site | Emission |
 | --- | --- |
 | `QuicConnection::OnPacket`, `QuicConnection::FinishQuicTracePacket` | RX packet start at the completion of the receive system call that returned its datagram, a `read_queue` phase until processing begins, and the end with its outcome; early framer returns close before processing another packet |
-| `QuicConnection` public header, header unprotect, payload decrypt, `UpdatePacketContent` | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, and one `frame_process` per frame other than padding, from the frame callback after the framer decodes it until the next frame is decoded or the packet ends |
-| `QuicStreamSequencer::OnFrameData`, `QuicConnection::OnStreamFrame` | STREAM frame byte range, stamped when the receive buffer accepted its bytes and before the stream is told; `dropped` for a frame the session or stream discarded |
+| `QuicConnection` public header, header unprotect, payload decrypt, `UpdatePacketContent` | RX packet phases `header_parse`, `header_unprotect`, `payload_decrypt`, and one `frame_process` per frame other than padding, from the frame callback after the framer decodes it until the framer starts decoding the next frame or the packet ends |
+| `QuicStreamSequencer::OnFrameData`, `QuicConnection::OnStreamFrame` | STREAM frame byte range, stamped when the receive buffer accepted its bytes and before the stream is told; `dropped` for a frame the session or stream discarded, and `malformed` for one whose processing closed the connection |
 | `QuicPacketCreator::CreateAndSerializeStreamFrame`, `SerializePacket`, and the connectivity probe, path challenge, path response, and large packet number connection close serializers | TX packet start, phases `frame_encode` and `packet_encrypt`, then a `send_queue` phase |
 | `QuicConnection::WritePacket`, `FlushCoalescedPacket`, `WriteQueuedPackets`, `WritePacketUsingWriter` | TX packet end at the completion of the send system call that accepted its datagram, or `dropped` when that send failed |
 | `QuicConnection::SendPacketToWriter` | `quic_connection_path` before the first send and whenever the addresses a connection sends between change |
@@ -85,7 +85,8 @@ encryption, as in mvfst and Quinn, and a frame without bytes covers no range.
 
 Packet outcomes match mvfst's and Quinn's. A packet whose frame closes the
 connection over an error ends `malformed`, one that carries the peer's
-CONNECTION_CLOSE ends `success`, and one the framer ignores ends `dropped`. A
+CONNECTION_CLOSE, a stateless reset, or a version negotiation ends `success`,
+and one the framer ignores or that arrives before its keys ends `dropped`. A
 frame whose processing ends with an error leaves its `frame_process` phase
 abandoned.
 
