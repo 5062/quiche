@@ -553,8 +553,8 @@ bool QuicConnectionPeer::TestLastReceivedPacketInfoDefaults() {
   QuicConnection::ReceivedPacketInfo info{QuicTime::Zero()};
 #if defined(QUICHE_MOQ_TRACE)
   // The traced build adds the read time of the packet's datagram.
-  constexpr size_t kExpectedSize = 280;
-  const bool quic_trace_defaults = info.quic_trace_read_ns == 0;
+  constexpr size_t kExpectedSize = 288;
+  const bool quic_trace_defaults = !info.quic_trace_read_ns.has_value();
 #else
   constexpr size_t kExpectedSize = 272;
   const bool quic_trace_defaults = true;

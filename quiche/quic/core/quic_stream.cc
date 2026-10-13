@@ -15,6 +15,9 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/platform/api/quiche_reference_counted.h"
+#include "quiche/common/quiche_mem_slice.h"
 #include "quiche/http2/core/spdy_protocol.h"
 #include "quiche/quic/core/frames/quic_connection_close_frame.h"
 #include "quiche/quic/core/frames/quic_reset_stream_at_frame.h"
@@ -39,9 +42,6 @@
 #include "quiche/quic/platform/api/quic_flag_utils.h"
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_logging.h"
-#include "quiche/common/platform/api/quiche_logging.h"
-#include "quiche/common/platform/api/quiche_reference_counted.h"
-#include "quiche/common/quiche_mem_slice.h"
 
 using spdy::SpdyPriority;
 
@@ -193,7 +193,7 @@ QuicStreamId PendingStream::id() const { return id_; }
 #if defined(QUICHE_MOQ_TRACE)
 void PendingStream::OnQuicTraceDataAccepted(uint64_t accepted_ns) {
   if (quic_trace_connection_ != nullptr) {
-    quic_trace_connection_->RecordQuicTraceStreamFrameAccepted(accepted_ns);
+    quic_trace_connection_->QuicTraceRecordStreamFrameAccepted(accepted_ns);
   }
 }
 #endif
@@ -1081,34 +1081,40 @@ bool QuicStream::HasBufferedData() const {
 ParsedQuicVersion QuicStream::version() const { return session_->version(); }
 
 #if defined(QUICHE_MOQ_TRACE)
-uint64_t QuicStream::QuicTraceConnectionId() const {
+quic_trace::SendBlocked QuicStream::QuicTraceSendBlocked(
+    quic_trace_send_blocked_reason reason) const {
+  // A stream outside a connection, such as one a test builds, records none.
   QuicConnection* connection = session_->connection();
-  return connection == nullptr ? 0 : connection->quic_trace_connection_id();
+  if (connection == nullptr) {
+    return quic_trace::SendBlocked();
+  }
+  return quic_trace::SendBlocked(connection->quic_trace_connection_id(), reason,
+                                 id());
 }
 
-void QuicStream::QuicTraceFlowControl() {
+void QuicStream::QuicTraceUpdateFlowControlBlocked() {
   const bool blocked = !write_side_closed_ && HasBufferedData() &&
                        CalculateSendWindowSize() == 0;
   if (!blocked) {
-    quic_trace_flow_blocked_.finish();
+    quic_trace_flow_control_blocked_.finish();
     return;
   }
   const quic_trace_send_blocked_reason reason =
       flow_controller_.has_value() && flow_controller_->SendWindowSize() == 0
           ? QUIC_TRACE_SEND_BLOCKED_REASON_STREAM_FLOW_CONTROL
           : QUIC_TRACE_SEND_BLOCKED_REASON_CONNECTION_FLOW_CONTROL;
-  if (quic_trace_flow_blocked_.active() && quic_trace_flow_reason_ == reason) {
+  if (quic_trace_flow_control_blocked_.active() &&
+      quic_trace_flow_control_reason_ == reason) {
     return;
   }
-  quic_trace_flow_blocked_ =
-      quic_trace::SendBlocked(QuicTraceConnectionId(), reason, id());
-  quic_trace_flow_reason_ = reason;
+  quic_trace_flow_control_blocked_ = QuicTraceSendBlocked(reason);
+  quic_trace_flow_control_reason_ = reason;
 }
 
 void QuicStream::OnQuicTraceDataAccepted(uint64_t accepted_ns) {
   if (QuicConnection* connection = session_->connection();
       connection != nullptr) {
-    connection->RecordQuicTraceStreamFrameAccepted(accepted_ns);
+    connection->QuicTraceRecordStreamFrameAccepted(accepted_ns);
   }
 }
 #endif
@@ -1437,7 +1443,9 @@ bool QuicStream::WriteStreamData(QuicStreamOffset offset,
 void QuicStream::WriteBufferedData(EncryptionLevel level) {
   QUICHE_DCHECK(!write_side_closed_ && (HasBufferedData() || fin_buffered_));
 #if defined(QUICHE_MOQ_TRACE)
-  absl::Cleanup quic_trace_flow_control = [this] { QuicTraceFlowControl(); };
+  absl::Cleanup quic_trace_flow_control = [this] {
+    QuicTraceUpdateFlowControlBlocked();
+  };
 #endif
 
   if (session_->ShouldYield(id())) {
@@ -1553,11 +1561,10 @@ bool QuicStream::CanWriteNewData() const {
 #if defined(QUICHE_MOQ_TRACE)
   // A writer is blocked from the first refusal until it is accepted again.
   if (can_write) {
-    quic_trace_buffer_blocked_.finish();
-  } else if (!quic_trace_buffer_blocked_.active()) {
-    quic_trace_buffer_blocked_ = quic_trace::SendBlocked(
-        QuicTraceConnectionId(), QUIC_TRACE_SEND_BLOCKED_REASON_SEND_BUFFER,
-        id());
+    quic_trace_send_buffer_blocked_.finish();
+  } else if (!quic_trace_send_buffer_blocked_.active()) {
+    quic_trace_send_buffer_blocked_ =
+        QuicTraceSendBlocked(QUIC_TRACE_SEND_BLOCKED_REASON_SEND_BUFFER);
   }
 #endif
   return can_write;

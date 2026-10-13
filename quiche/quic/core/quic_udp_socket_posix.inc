@@ -333,7 +333,7 @@ void QuicUdpSocketApi::ReadPacket(
   if (bytes_read < 0) {
     trace_call.failed(errno);
   } else {
-    result->quic_trace_read_ns = read_ns.value_or(0);
+    result->quic_trace_read_ns = read_ns;
     trace_call.succeeded(quic_trace::SocketStats::buffer(bytes_read));
   }
 #endif
@@ -446,7 +446,7 @@ size_t QuicUdpSocketApi::ReadMultiplePackets(
       quic_trace::SocketStats trace_stats;
       for (int i = 0; i < packets_read; ++i) {
         trace_stats += quic_trace::SocketStats::buffer(hdrs[i].msg_len);
-        (*results)[i].quic_trace_read_ns = read_ns.value_or(0);
+        (*results)[i].quic_trace_read_ns = read_ns;
       }
       trace_call.succeeded(trace_stats);
     }
@@ -643,7 +643,7 @@ WriteResult QuicUdpSocketApi::WritePacket(
                                 : WRITE_STATUS_ERROR,
                             errno);
 #if defined(QUICHE_MOQ_TRACE)
-  result.quic_trace_sent_ns = sent_ns.value_or(0);
+  result.quic_trace_sent_ns = sent_ns;
 #endif
   return result;
 }

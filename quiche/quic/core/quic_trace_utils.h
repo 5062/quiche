@@ -29,7 +29,8 @@ inline quic_trace::PathEndpoint QuicTracePathEndpoint(const QuicIpAddress& host,
   if (!host.IsInitialized()) {
     return quic_trace::PathEndpoint::ipv6({}, port);
   }
-  const sockaddr_storage address = QuicSocketAddress(host, port).generic_address();
+  const sockaddr_storage address =
+      QuicSocketAddress(host, port).generic_address();
   return quic_trace::PathEndpoint::from_sockaddr(
       reinterpret_cast<const sockaddr*>(&address));
 }

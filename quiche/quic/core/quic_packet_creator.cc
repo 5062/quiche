@@ -71,17 +71,17 @@ void LogCoalesceStreamFrameStatus(bool success) {
 #if defined(QUICHE_MOQ_TRACE)
 // Starts the TX lifecycle of |packet| once FillPacketHeader has assigned its
 // number.
-quic_trace::Packet StartTxPacketTrace(uint64_t connection_id,
-                                      const SerializedPacket& packet) {
+quic_trace::Packet QuicTraceStartTxPacket(std::optional<uint64_t> connection_id,
+                                          const SerializedPacket& packet) {
   // Only a QuicConnection's creator has a trace connection ID. The dispatcher's
   // creators build an Initial ACK for buffered packets and stateless
   // connection closes, which belong to no connection and are written outside
   // the connection's traced send path, so they get no packet lifecycle.
-  if (connection_id == 0) {
+  if (!connection_id.has_value()) {
     return quic_trace::Packet();
   }
   quic_trace::PacketContext context;
-  context.connection_id = connection_id;
+  context.connection_id = *connection_id;
   context.direction = QUIC_TRACE_DIRECTION_TX;
   context.packet_number = packet.packet_number.ToUint64();
   context.packet_space = QuicTracePacketSpace(packet.encryption_level);
@@ -91,9 +91,10 @@ quic_trace::Packet StartTxPacketTrace(uint64_t connection_id,
 // Ends the encrypt phase with the outcome of encryption and hands a produced
 // packet to |send|, where it waits in send_queue until a send accepts it. A
 // zero length means the packet was never produced, so it ends dropped.
-void FinishTxPacketTrace(quic_trace::Packet& packet,
-                         quic_trace::PacketPhase& encrypt,
-                         size_t encrypted_length, quic_trace::PendingSend& send) {
+void QuicTraceFinishTxPacket(quic_trace::Packet& packet,
+                             quic_trace::PacketPhase& encrypt,
+                             size_t encrypted_length,
+                             quic_trace::PendingSend& send) {
   if (encrypted_length == 0) {
     encrypt.finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
     packet.finish(QUIC_TRACE_PACKET_OUTCOME_DROPPED);
@@ -105,8 +106,8 @@ void FinishTxPacketTrace(quic_trace::Packet& packet,
 }
 
 // `retransmissions` holds, for each of `frames`, whether it resends data.
-void TraceStreamFrames(quic_trace::Packet& packet, const QuicFrames& frames,
-                       const std::vector<bool>& retransmissions) {
+void QuicTraceStreamFrames(quic_trace::Packet& packet, const QuicFrames& frames,
+                           const std::vector<bool>& retransmissions) {
   for (size_t i = 0; i < frames.size(); ++i) {
     const QuicFrame& frame = frames[i];
     if (frame.type != STREAM_FRAME || frame.stream_frame.data_length == 0) {
@@ -618,13 +619,13 @@ size_t QuicPacketCreator::ReserializeInitialPacketInCoalescedPacket(
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace_reserializing_ = true;
 #endif
-  const bool reserialized = SerializePacket(
-      QuicOwnedPacketBuffer(buffer, nullptr), buffer_len,
-      /*allow_padding=*/false);
+  const bool reserialized =
+      SerializePacket(QuicOwnedPacketBuffer(buffer, nullptr), buffer_len,
+                      /*allow_padding=*/false);
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace_reserializing_ = false;
   // The disabled trace must not ride along with the next packet.
-  packet_.quic_trace_send = quic_trace::PendingSend();
+  packet_.quic_trace_pending = quic_trace::PendingSend();
 #endif
   if (!reserialized) {
     return 0;
@@ -660,7 +661,7 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
   FillPacketHeader(&header);
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::Packet trace_packet =
-      StartTxPacketTrace(quic_trace_connection_id_, packet_);
+      QuicTraceStartTxPacket(quic_trace_connection_id_, packet_);
   auto trace_encode = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE);
 #endif
   packet_.fate = delegate_->GetSerializedPacketFate(
@@ -765,7 +766,8 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
                               QUIC_TRACE_PACKET_OUTCOME_SUCCESS,
                               transmission_type != NOT_RETRANSMISSION);
   }
-  auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
+  auto trace_encrypt =
+      trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
 
   QUICHE_DCHECK(packet_.encryption_level == ENCRYPTION_FORWARD_SECURE ||
@@ -803,7 +805,7 @@ void QuicPacketCreator::CreateAndSerializeStreamFrame(
   trace_packet.set_byte_len(encrypted_length);
   // The packet ends when the send carrying it returns, so it travels with
   // its bytes until then.
-  packet_.quic_trace_send.add(std::move(trace_packet));
+  packet_.quic_trace_pending.add(std::move(trace_packet));
 #endif
   OnSerializedPacket();
 }
@@ -921,7 +923,7 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   quic_trace::Packet trace_packet =
       quic_trace_reserializing_
           ? quic_trace::Packet()
-          : StartTxPacketTrace(quic_trace_connection_id_, packet_);
+          : QuicTraceStartTxPacket(quic_trace_connection_id_, packet_);
   auto trace_encode = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE);
 #endif
   if (packet_.encryption_level == ENCRYPTION_INITIAL) {
@@ -1019,9 +1021,10 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   trace_encode.finish(QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
   // STREAM frames are recorded before encryption, as mvfst and Quinn record
   // them.
-  TraceStreamFrames(trace_packet, queued_frames_,
-                    quic_trace_queued_retransmissions_);
-  auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
+  QuicTraceStreamFrames(trace_packet, queued_frames_,
+                        quic_trace_queued_retransmissions_);
+  auto trace_encrypt =
+      trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
   const size_t encrypted_length = framer_->EncryptInPlace(
       packet_.encryption_level, packet_.packet_number,
@@ -1048,7 +1051,7 @@ bool QuicPacketCreator::SerializePacket(QuicOwnedPacketBuffer encrypted_buffer,
   trace_packet.set_byte_len(packet_.encrypted_length);
   // The packet ends when the send carrying it returns, so it travels with
   // its bytes until then.
-  packet_.quic_trace_send.add(std::move(trace_packet));
+  packet_.quic_trace_pending.add(std::move(trace_packet));
 #endif
 
   encrypted_buffer.buffer = nullptr;
@@ -1072,7 +1075,7 @@ QuicPacketCreator::SerializeGQuicConnectivityProbingPacket() {
 
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::Packet trace_packet =
-      StartTxPacketTrace(quic_trace_connection_id_, packet_);
+      QuicTraceStartTxPacket(quic_trace_connection_id_, packet_);
   auto trace_encode = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE);
 #endif
   std::unique_ptr<char[]> buffer(new char[kMaxOutgoingPacketSize]);
@@ -1085,7 +1088,8 @@ QuicPacketCreator::SerializeGQuicConnectivityProbingPacket() {
 #if defined(QUICHE_MOQ_TRACE)
   trace_encode.finish(length == 0 ? QUIC_TRACE_PACKET_OUTCOME_DROPPED
                                   : QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-  auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
+  auto trace_encrypt =
+      trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
   const size_t encrypted_length = framer_->EncryptInPlace(
       packet_.encryption_level, packet_.packet_number,
@@ -1093,9 +1097,9 @@ QuicPacketCreator::SerializeGQuicConnectivityProbingPacket() {
       kMaxOutgoingPacketSize, buffer.get());
   QUICHE_DCHECK(encrypted_length) << ENDPOINT;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::PendingSend trace_send;
-  FinishTxPacketTrace(trace_packet, trace_encrypt, encrypted_length,
-                      trace_send);
+  quic_trace::PendingSend trace_pending;
+  QuicTraceFinishTxPacket(trace_packet, trace_encrypt, encrypted_length,
+                          trace_pending);
 #endif
 
   std::unique_ptr<SerializedPacket> serialize_packet(new SerializedPacket(
@@ -1108,7 +1112,7 @@ QuicPacketCreator::SerializeGQuicConnectivityProbingPacket() {
   serialize_packet->encryption_level = packet_.encryption_level;
   serialize_packet->transmission_type = NOT_RETRANSMISSION;
 #if defined(QUICHE_MOQ_TRACE)
-  serialize_packet->quic_trace_send = std::move(trace_send);
+  serialize_packet->quic_trace_pending = std::move(trace_pending);
 #endif
 
   return serialize_packet;
@@ -1132,7 +1136,7 @@ QuicPacketCreator::SerializePathChallengeConnectivityProbingPacket(
 
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::Packet trace_packet =
-      StartTxPacketTrace(quic_trace_connection_id_, packet_);
+      QuicTraceStartTxPacket(quic_trace_connection_id_, packet_);
   auto trace_encode = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE);
 #endif
   std::unique_ptr<char[]> buffer(new char[kMaxOutgoingPacketSize]);
@@ -1146,7 +1150,8 @@ QuicPacketCreator::SerializePathChallengeConnectivityProbingPacket(
 #if defined(QUICHE_MOQ_TRACE)
   trace_encode.finish(length == 0 ? QUIC_TRACE_PACKET_OUTCOME_DROPPED
                                   : QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-  auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
+  auto trace_encrypt =
+      trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
   const size_t encrypted_length = framer_->EncryptInPlace(
       packet_.encryption_level, packet_.packet_number,
@@ -1154,9 +1159,9 @@ QuicPacketCreator::SerializePathChallengeConnectivityProbingPacket(
       kMaxOutgoingPacketSize, buffer.get());
   QUICHE_DCHECK(encrypted_length) << ENDPOINT;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::PendingSend trace_send;
-  FinishTxPacketTrace(trace_packet, trace_encrypt, encrypted_length,
-                      trace_send);
+  quic_trace::PendingSend trace_pending;
+  QuicTraceFinishTxPacket(trace_packet, trace_encrypt, encrypted_length,
+                          trace_pending);
 #endif
 
   std::unique_ptr<SerializedPacket> serialize_packet(
@@ -1170,7 +1175,7 @@ QuicPacketCreator::SerializePathChallengeConnectivityProbingPacket(
   serialize_packet->encryption_level = packet_.encryption_level;
   serialize_packet->transmission_type = NOT_RETRANSMISSION;
 #if defined(QUICHE_MOQ_TRACE)
-  serialize_packet->quic_trace_send = std::move(trace_send);
+  serialize_packet->quic_trace_pending = std::move(trace_pending);
 #endif
   if (send_scone_packet_) {
     ReserveSpaceForScone();
@@ -1197,7 +1202,7 @@ QuicPacketCreator::SerializePathResponseConnectivityProbingPacket(
 
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::Packet trace_packet =
-      StartTxPacketTrace(quic_trace_connection_id_, packet_);
+      QuicTraceStartTxPacket(quic_trace_connection_id_, packet_);
   auto trace_encode = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE);
 #endif
   std::unique_ptr<char[]> buffer(new char[kMaxOutgoingPacketSize]);
@@ -1211,7 +1216,8 @@ QuicPacketCreator::SerializePathResponseConnectivityProbingPacket(
 #if defined(QUICHE_MOQ_TRACE)
   trace_encode.finish(length == 0 ? QUIC_TRACE_PACKET_OUTCOME_DROPPED
                                   : QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-  auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
+  auto trace_encrypt =
+      trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
   const size_t encrypted_length = framer_->EncryptInPlace(
       packet_.encryption_level, packet_.packet_number,
@@ -1219,9 +1225,9 @@ QuicPacketCreator::SerializePathResponseConnectivityProbingPacket(
       kMaxOutgoingPacketSize, buffer.get());
   QUICHE_DCHECK(encrypted_length) << ENDPOINT;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::PendingSend trace_send;
-  FinishTxPacketTrace(trace_packet, trace_encrypt, encrypted_length,
-                      trace_send);
+  quic_trace::PendingSend trace_pending;
+  QuicTraceFinishTxPacket(trace_packet, trace_encrypt, encrypted_length,
+                          trace_pending);
 #endif
 
   std::unique_ptr<SerializedPacket> serialize_packet(
@@ -1235,7 +1241,7 @@ QuicPacketCreator::SerializePathResponseConnectivityProbingPacket(
   serialize_packet->encryption_level = packet_.encryption_level;
   serialize_packet->transmission_type = NOT_RETRANSMISSION;
 #if defined(QUICHE_MOQ_TRACE)
-  serialize_packet->quic_trace_send = std::move(trace_send);
+  serialize_packet->quic_trace_pending = std::move(trace_pending);
 #endif
   if (send_scone_packet_) {
     ReserveSpaceForScone();
@@ -1277,7 +1283,7 @@ QuicPacketCreator::SerializeLargePacketNumberConnectionClosePacket(
 
 #if defined(QUICHE_MOQ_TRACE)
   quic_trace::Packet trace_packet =
-      StartTxPacketTrace(quic_trace_connection_id_, packet_);
+      QuicTraceStartTxPacket(quic_trace_connection_id_, packet_);
   auto trace_encode = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_FRAME_ENCODE);
 #endif
   std::unique_ptr<char[]> buffer(new char[kMaxOutgoingPacketSize]);
@@ -1289,7 +1295,8 @@ QuicPacketCreator::SerializeLargePacketNumberConnectionClosePacket(
 #if defined(QUICHE_MOQ_TRACE)
   trace_encode.finish(length == 0 ? QUIC_TRACE_PACKET_OUTCOME_DROPPED
                                   : QUIC_TRACE_PACKET_OUTCOME_SUCCESS);
-  auto trace_encrypt = trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
+  auto trace_encrypt =
+      trace_packet.phase(QUIC_TRACE_PACKET_PHASE_PACKET_ENCRYPT);
 #endif
   const size_t encrypted_length = framer_->EncryptInPlace(
       packet_.encryption_level, packet_.packet_number,
@@ -1297,9 +1304,9 @@ QuicPacketCreator::SerializeLargePacketNumberConnectionClosePacket(
       kMaxOutgoingPacketSize, buffer.get());
   QUICHE_DCHECK(encrypted_length) << ENDPOINT;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::PendingSend trace_send;
-  FinishTxPacketTrace(trace_packet, trace_encrypt, encrypted_length,
-                      trace_send);
+  quic_trace::PendingSend trace_pending;
+  QuicTraceFinishTxPacket(trace_packet, trace_encrypt, encrypted_length,
+                          trace_pending);
 #endif
 
   std::unique_ptr<SerializedPacket> serialize_packet(
@@ -1313,7 +1320,7 @@ QuicPacketCreator::SerializeLargePacketNumberConnectionClosePacket(
   serialize_packet->encryption_level = packet_.encryption_level;
   serialize_packet->transmission_type = NOT_RETRANSMISSION;
 #if defined(QUICHE_MOQ_TRACE)
-  serialize_packet->quic_trace_send = std::move(trace_send);
+  serialize_packet->quic_trace_pending = std::move(trace_pending);
 #endif
 
   return serialize_packet;

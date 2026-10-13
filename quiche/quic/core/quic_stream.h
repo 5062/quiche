@@ -581,16 +581,17 @@ class QUICHE_EXPORT QuicStream : public QuicStreamSequencer::StreamInterface {
 #if defined(QUICHE_MOQ_TRACE)
   // Opens or ends the interval in which flow control holds this stream's
   // buffered data, after a write decided how much it may send.
-  void QuicTraceFlowControl();
-  // The id moq-trace events of this stream's connection carry.
-  uint64_t QuicTraceConnectionId() const;
+  void QuicTraceUpdateFlowControlBlocked();
+  // Starts an interval in which a write to this stream is blocked by `reason`.
+  quic_trace::SendBlocked QuicTraceSendBlocked(
+      quic_trace_send_blocked_reason reason) const;
 
-  quic_trace::SendBlocked quic_trace_flow_blocked_;
-  quic_trace_send_blocked_reason quic_trace_flow_reason_ =
+  quic_trace::SendBlocked quic_trace_flow_control_blocked_;
+  quic_trace_send_blocked_reason quic_trace_flow_control_reason_ =
       QUIC_TRACE_SEND_BLOCKED_REASON_STREAM_FLOW_CONTROL;
   // The interval in which the send buffer refuses new data. It follows the
   // answers `CanWriteNewData` gives, and that query is const.
-  mutable quic_trace::SendBlocked quic_trace_buffer_blocked_;
+  mutable quic_trace::SendBlocked quic_trace_send_buffer_blocked_;
 #endif
 
   // Called when bytes are sent to the peer.

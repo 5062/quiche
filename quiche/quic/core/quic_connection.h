@@ -926,8 +926,8 @@ class QUICHE_EXPORT QuicConnection
 
 #if defined(QUICHE_MOQ_TRACE)
   // Records when the receive buffer accepted the bytes of the STREAM frame
-  // being processed, which is that frame's moq-trace timestamp.
-  void RecordQuicTraceStreamFrameAccepted(uint64_t accepted_ns) {
+  // being processed, which is that frame's quic_trace timestamp.
+  void QuicTraceRecordStreamFrameAccepted(uint64_t accepted_ns) {
     quic_trace_stream_frame_accepted_ns_ = accepted_ns;
   }
 
@@ -1653,7 +1653,7 @@ class QUICHE_EXPORT QuicConnection
   // Process one packet and close any trace left by a framer early return.
   bool ProcessPacket(const QuicEncryptedPacket& packet);
 #if defined(QUICHE_MOQ_TRACE)
-  void FinishQuicTracePacket(quic_trace_packet_outcome outcome);
+  void QuicTraceFinishPacket(quic_trace_packet_outcome outcome);
   // Starts the frame_process phase of the frame of `type` the framer just
   // decoded, unless it is padding. Every frame callback reaches
   // UpdatePacketContent first, which calls this.
@@ -1765,7 +1765,7 @@ class QUICHE_EXPORT QuicConnection
 #if defined(QUICHE_MOQ_TRACE)
     // The traced packets these bytes hold, which end when a later write
     // finally sends them.
-    quic_trace::PendingSend quic_trace_send;
+    quic_trace::PendingSend quic_trace_pending;
 #endif
   };
 
@@ -1801,10 +1801,10 @@ class QUICHE_EXPORT QuicConnection
     QuicSocketAddress actual_destination_address;
 #if defined(QUICHE_MOQ_TRACE)
     // When the receive system call that returned the datagram completed, on
-    // the moq-trace clock, or 0 for a datagram that came from no traced read.
-    // It travels with the packet info, so a coalesced packet and an
+    // the quic_trace clock, absent for a datagram that came from no traced
+    // read. It travels with the packet info, so a coalesced packet and an
     // undecryptable packet replayed later keep their original read.
-    uint64_t quic_trace_read_ns = 0;
+    std::optional<uint64_t> quic_trace_read_ns;
 #endif
     // 8B remaining in the fourth cacheline.
     // TODO(martinduke): Remove once gfe2_reloadable_flag_quic_one_dcid is
@@ -2540,17 +2540,25 @@ class QUICHE_EXPORT QuicConnection
   Perspective perspective_;
 
 #if defined(QUICHE_MOQ_TRACE)
-  // Decides `CanWrite`, recording in `quic_trace_blocked_now_` the check that
-  // stopped data from being sent, if one of the traced checks did.
-  bool CanWriteData(HasRetransmittableData retransmittable);
-  // Opens the blocked interval for `quic_trace_blocked_now_` and ends every
-  // other, after a `CanWrite` for data. An interval ends at the first such
-  // call its check no longer stops, which is when the data could go out.
-  void QuicTraceUpdateSendBlocked();
-  std::optional<quic_trace_send_blocked_reason> quic_trace_blocked_now_;
-  quic_trace::SendBlocked quic_trace_blocked_congestion_window_;
-  quic_trace::SendBlocked quic_trace_blocked_pacing_;
-  quic_trace::SendBlocked quic_trace_blocked_amplification_;
+  // Decides `CanWrite`, recording in `quic_trace_transmit_blocked_reason_` the
+  // check that stopped data from being sent, if one of the traced checks did.
+  bool QuicTraceCanWrite(HasRetransmittableData retransmittable);
+  // Opens the blocked interval for `quic_trace_transmit_blocked_reason_` and
+  // ends every other, after a `CanWrite` for data. An interval ends at the
+  // first such call its check no longer stops, which is when the data could go
+  // out.
+  void QuicTraceUpdateTransmitBlocked();
+  // Ends the traced packets of one write by its send's outcome. A write
+  // whose result names no traced send system call, such as one a batch writer
+  // only buffered, leaves its packets unfinished, so they record abandonment.
+  void QuicTraceFinishPending(quic_trace::PendingSend& send,
+                              const WriteResult& result);
+
+  std::optional<quic_trace_send_blocked_reason>
+      quic_trace_transmit_blocked_reason_;
+  quic_trace::SendBlocked quic_trace_congestion_window_blocked_;
+  quic_trace::SendBlocked quic_trace_pacing_blocked_;
+  quic_trace::SendBlocked quic_trace_amplification_blocked_;
 
   const uint64_t quic_trace_connection_id_;
   std::optional<quic_trace::Packet> quic_trace_rx_packet_;
@@ -2568,7 +2576,7 @@ class QUICHE_EXPORT QuicConnection
   bool quic_trace_rx_missing_key_ = false;
   // The traced packets coalesced into |coalesced_packet_|, which end when the
   // coalesced datagram is sent.
-  quic_trace::PendingSend quic_trace_coalesced_;
+  quic_trace::PendingSend quic_trace_coalesced_pending_;
   // When the stream's receive buffer accepted the STREAM frame being
   // processed, set by the stream and cleared before each frame.
   std::optional<uint64_t> quic_trace_stream_frame_accepted_ns_;
@@ -2578,10 +2586,6 @@ class QUICHE_EXPORT QuicConnection
   // Tests that inject packets without a traced read set this, so their
   // packets start at injection instead of going untraced.
   bool quic_trace_stamp_unread_packets_ = false;
-  // Ends the traced packets of one write by its send's outcome. A write
-  // whose result names no traced send system call, such as one a batch writer
-  // only buffered, leaves its packets unfinished, so they record abandonment.
-  void FinishQuicTraceWrite(quic_trace::PendingSend& send, const WriteResult& result);
 #endif
 
   // The ECN codepoint of the last packet to be sent to the writer, which

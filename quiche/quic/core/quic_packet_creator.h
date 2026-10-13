@@ -25,6 +25,11 @@
 #include "absl/base/attributes.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "quiche/common/platform/api/quiche_export.h"
+#include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/quiche_circular_deque.h"
+#include "quiche/common/quiche_endian.h"
+#include "quiche/common/quiche_mem_slice.h"
 #include "quiche/quic/core/crypto/quic_encrypter.h"
 #include "quiche/quic/core/crypto/quic_random.h"
 #include "quiche/quic/core/frames/quic_frame.h"
@@ -39,11 +44,6 @@
 #include "quiche/quic/core/quic_versions.h"
 #include "quiche/quic/core/scone.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
-#include "quiche/common/platform/api/quiche_export.h"
-#include "quiche/common/platform/api/quiche_logging.h"
-#include "quiche/common/quiche_circular_deque.h"
-#include "quiche/common/quiche_endian.h"
-#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 namespace test {
@@ -772,7 +772,8 @@ class QUICHE_EXPORT QuicPacketCreator {
   bool append_scone_indicator_ = false;
 
 #if defined(QUICHE_MOQ_TRACE)
-  uint64_t quic_trace_connection_id_ = 0;
+  // Absent in a creator outside a connection, such as the dispatcher's.
+  std::optional<uint64_t> quic_trace_connection_id_;
   // Set while an Initial packet is re-serialized into a coalesced datagram,
   // which must not start a second lifecycle for the same packet.
   bool quic_trace_reserializing_ = false;

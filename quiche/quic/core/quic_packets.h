@@ -350,11 +350,13 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
 
 #if defined(QUICHE_MOQ_TRACE)
   // When the receive system call that returned this packet's datagram
-  // completed, on the moq-trace clock, or 0 when the packet did not come from
-  // a traced read. A packet without it gets no packet trace, because its
+  // completed, on the quic_trace clock, absent when the packet did not come
+  // from a traced read. A packet without it gets no packet trace, because its
   // lifecycle must start at that read.
-  uint64_t quic_trace_read_ns() const { return quic_trace_read_ns_; }
-  void set_quic_trace_read_ns(uint64_t read_ns) {
+  std::optional<uint64_t> quic_trace_read_ns() const {
+    return quic_trace_read_ns_;
+  }
+  void set_quic_trace_read_ns(std::optional<uint64_t> read_ns) {
     quic_trace_read_ns_ = read_ns;
   }
 #endif
@@ -384,10 +386,9 @@ class QUICHE_EXPORT QuicReceivedPacket : public QuicEncryptedPacket {
   // IPv6 flow label.
   uint32_t ipv6_flow_label_;
 #if defined(QUICHE_MOQ_TRACE)
-  uint64_t quic_trace_read_ns_ = 0;
+  std::optional<uint64_t> quic_trace_read_ns_;
 #endif
 };
-
 
 // SerializedPacket contains information of a serialized(encrypted) packet.
 //
@@ -450,7 +451,7 @@ struct QUICHE_EXPORT SerializedPacket {
 #if defined(QUICHE_MOQ_TRACE)
   // The traced packet these bytes hold, waiting for its send. Moves with the
   // packet; a copy made by CopySerializedPacket does not carry it.
-  quic_trace::PendingSend quic_trace_send;
+  quic_trace::PendingSend quic_trace_pending;
 #endif
 };
 

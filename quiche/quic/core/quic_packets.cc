@@ -467,7 +467,7 @@ SerializedPacket::SerializedPacket(SerializedPacket&& other)
       initial_header(other.initial_header)
 #if defined(QUICHE_MOQ_TRACE)
       ,
-      quic_trace_send(std::move(other.quic_trace_send))
+      quic_trace_pending(std::move(other.quic_trace_pending))
 #endif
 {
   if (this != &other) {

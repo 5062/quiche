@@ -17,12 +17,6 @@
 #include "quiche/quic/platform/api/quic_server_stats.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
 
-#if defined(QUICHE_MOQ_TRACE)
-#include <cerrno>
-
-#include <quic_trace/trace.hpp>
-#endif
-
 namespace quic {
 
 QuicPacketReader::QuicPacketReader()
