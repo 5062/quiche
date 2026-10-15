@@ -620,22 +620,24 @@ WriteResult QuicUdpSocketApi::WritePacket(
 
   int rc;
 #if defined(QUICHE_MOQ_TRACE)
-  quic_trace::SocketCall trace_call(QUIC_TRACE_DIRECTION_TX,
-                                    quic_trace_send_connection_id);
+  std::optional<uint64_t> sent_ns;
 #endif
   do {
-    rc = sendmsg(fd, &hdr, 0);
-  } while (rc < 0 && errno == EINTR);
 #if defined(QUICHE_MOQ_TRACE)
-  // The instant the send returns ends this socket operation and, through the
-  // result, every packet the datagram carried.
-  const std::optional<uint64_t> sent_ns = trace_call.returned();
-  if (rc >= 0) {
-    trace_call.succeeded(quic_trace::SocketStats::buffer(rc));
-  } else {
-    trace_call.failed(errno);
-  }
+    quic_trace::SocketCall trace_call(QUIC_TRACE_DIRECTION_TX,
+                                      quic_trace_send_connection_id);
 #endif
+    rc = sendmsg(fd, &hdr, 0);
+#if defined(QUICHE_MOQ_TRACE)
+    // Each attempt ends at its syscall, before retrying an interrupted send.
+    sent_ns = trace_call.returned();
+    if (rc >= 0) {
+      trace_call.succeeded(quic_trace::SocketStats::buffer(rc));
+    } else {
+      trace_call.failed(errno);
+    }
+#endif
+  } while (rc < 0 && errno == EINTR);
   WriteResult result =
       rc >= 0 ? WriteResult(WRITE_STATUS_OK, rc)
               : WriteResult((errno == EAGAIN || errno == EWOULDBLOCK)

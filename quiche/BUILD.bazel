@@ -69,8 +69,9 @@ cc_library(
 )
 
 test_suite_from_source_list(
-    name = "quiche_linux_tests",
+    name = "quiche_linux_writer_tests",
     srcs = [
+        "quic/core/quic_linux_socket_utils_test.cc",
         "quic/core/batch_writer/quic_gso_batch_writer_test.cc",
         "quic/core/batch_writer/quic_sendmmsg_batch_writer_test.cc",
     ],
@@ -84,6 +85,35 @@ test_suite_from_source_list(
         "@com_google_absl//absl/base:core_headers",
         "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+# Wrap only this regression's syscalls and provider observations.
+test_suite_from_source_list(
+    name = "quic_socket_trace_tests",
+    srcs = ["quic/core/quic_socket_trace_test.cc"],
+    target_compatible_with = ["@platforms//os:linux"],
+    linkopts = [
+        "-Wl,--wrap=sendmsg",
+        "-Wl,--wrap=quic_trace_udp_socket_start_enabled",
+        "-Wl,--wrap=quic_trace_udp_socket_start",
+        "-Wl,--wrap=quic_trace_udp_socket_end_enabled",
+        "-Wl,--wrap=quic_trace_udp_socket_end",
+    ],
+    deps = [
+        ":io_test_support",
+        ":quiche_core",
+        ":quiche_linux_test_support",
+        ":quiche_test_support",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+test_suite(
+    name = "quiche_linux_tests",
+    tests = [
+        ":quiche_linux_writer_tests",
+        ":quic_socket_trace_tests",
     ],
 )
 

@@ -288,15 +288,6 @@ class QUICHE_EXPORT QuicLinuxSocketUtils {
   static WriteResult WriteMultiplePackets(int fd, QuicMMsgHdr* mhdr,
                                           int* num_packets_sent);
 
-#if defined(QUICHE_MOQ_TRACE)
- private:
-  // The writes above wrap these, each one send system call, in quic_trace
-  // udp_socket events.
-  static WriteResult WritePacketImpl(int fd, const QuicMsgHdr& hdr,
-                                     bool enobufs_blocked);
-  static WriteResult WriteMultiplePacketsImpl(int fd, QuicMMsgHdr* mhdr,
-                                              int* num_packets_sent);
-#endif
 };
 
 }  // namespace quic

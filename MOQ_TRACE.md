@@ -74,7 +74,9 @@ code:
 - **Sockets.** TX socket events describe actual sends, so enqueueing a batch or
   flushing an empty batch emits nothing. GSO reports one buffer and the number of
   datagrams its segments represent, and a partial `sendmmsg` reports only the
-  accepted buffers and bytes. RX socket events carry no connection ID because
+  accepted buffers and bytes. Each interrupted send attempt gets its own socket
+  event before the `EINTR` retry; the write result carries the last attempt's
+  completion time. RX socket events carry no connection ID because
   one socket serves several connections. A TX socket event names the connection
   whose packet a writer sends at once, as mvfst's and Quinn's do; a batch writer
   can flush several connections' packets in one call, so its sends name none.
