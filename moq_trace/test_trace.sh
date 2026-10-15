@@ -5,7 +5,7 @@
 #   moq_trace/test_trace.sh [bazel flags...]
 #
 # Needs the traced build environment, LTTng, and the moq-trace command on PATH,
-# which the moq-trace checkout's development shell provides. The fixtures are
+# which the moq-workspace checkout's development shell provides. The fixtures are
 # duplicate and coalesced packets, GSO and sendmmsg batches with exact socket
 # counts, and streams blocked by their own flow control, the connection's, and
 # the send buffer.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 if ! command -v moq-trace >/dev/null 2>&1; then
-  echo "moq-trace must be on PATH; run from the moq-trace development shell" >&2
+  echo "moq-trace must be on PATH; run from the moq-workspace development shell" >&2
   exit 1
 fi
 BAZEL_VERB=build TRACE=1 "$here/build.sh" "$here/.." "$@" \
