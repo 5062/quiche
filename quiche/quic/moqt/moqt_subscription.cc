@@ -364,16 +364,35 @@ webtransport::Stream* absl_nullable SubscriptionPublisher::OpenDataStream(
       !visitor_->session()->CanOpenNextOutgoingUnidirectionalStream()) {
     return nullptr;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  // The cache opens a subscriber's stream inside the fan-out of its first
+  // object, so that copy records the setup as header work, not as its wait.
+  const uint64_t trace_setup_start_ns =
+      moq_trace_moq_object_phase_enabled() ? quic_trace::now_ns() : 0;
+#endif
   webtransport::Stream* new_stream =
       visitor_->session()->OpenOutgoingUnidirectionalStream();
   if (new_stream == nullptr) {
     return nullptr;
   }
+#if defined(QUICHE_MOQ_TRACE)
+  const uint64_t trace_open_end_ns =
+      trace_setup_start_ns != 0 ? quic_trace::now_ns() : 0;
+#endif
   stream_map_.AddStream(parameters.index, new_stream->GetStreamId());
-  new_stream->SetVisitor(std::make_unique<OutgoingSubgroupStream>(
+  auto subgroup_stream = std::make_unique<OutgoingSubgroupStream>(
       framer_, new_stream, parameters.index, parameters.first_object,
       weak_ptr_factory_.Create(), track_publisher_,
-      StreamPriorityFor(parameters), track_alias_, &trace_recorder_));
+      StreamPriorityFor(parameters), track_alias_, &trace_recorder_);
+#if defined(QUICHE_MOQ_TRACE)
+  if (trace_setup_start_ns != 0) {
+    moq_trace::StreamSetup setup;
+    setup.work(trace_setup_start_ns, quic_trace::now_ns());
+    setup.transport_call(trace_setup_start_ns, trace_open_end_ns);
+    subgroup_stream->set_trace_setup(setup);
+  }
+#endif
+  new_stream->SetVisitor(std::move(subgroup_stream));
   ++streams_opened_;
   new_stream->visitor()->OnCanWrite();
   return new_stream;

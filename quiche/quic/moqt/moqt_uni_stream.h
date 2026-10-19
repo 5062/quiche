@@ -168,6 +168,13 @@ class QUICHE_EXPORT OutgoingSubgroupStream : public OutgoingUniStream {
   // alarm is already created.
   void CreateAndSetAlarm(quic::QuicTime deadline);
 
+#if defined(QUICHE_MOQ_TRACE)
+  // Records how the stream was opened, for the first copy written on it.
+  void set_trace_setup(const moq_trace::StreamSetup& setup) {
+    trace_setup_ = setup;
+  }
+#endif
+
  private:
   friend class DeliveryTimeoutDelegate;
   friend class test::OutgoingSubgroupStreamPeer;
@@ -194,6 +201,8 @@ class QUICHE_EXPORT OutgoingSubgroupStream : public OutgoingUniStream {
   // When the stream stopped accepting writes in the middle of a traced copy.
   // The copy's blocked write lasts until the stream can take more.
   std::optional<uint64_t> trace_blocked_since_ns_;
+  // How the stream was opened, for the first copy written on it.
+  std::optional<moq_trace::StreamSetup> trace_setup_;
 
   // Starts the copy of `object` that this stream is about to write, when the
   // cache traced the inbound object it came from.

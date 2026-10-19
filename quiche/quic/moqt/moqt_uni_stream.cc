@@ -342,6 +342,8 @@ void OutgoingSubgroupStream::SendObjects() {
 void OutgoingSubgroupStream::StartTraceCopy(
     const PublishedObject& object, SubscriptionPublisherInterface& visitor,
     uint64_t clone_start_ns) {
+  const std::optional<moq_trace::StreamSetup> setup =
+      std::exchange(trace_setup_, std::nullopt);
   // An object the cache gave no logical identity has no inbound lifecycle for
   // the copy to pair with, so the copy is not traced.
   if (!object.metadata.trace_logical_id.has_value()) {
@@ -362,8 +364,12 @@ void OutgoingSubgroupStream::StartTraceCopy(
   trace_copy().emplace(context);
   // The copy waited from the instant the cache made the object readable until
   // this clone. Listeners run synchronously, so the wait includes delivering
-  // the object to subscribers notified before this one.
-  if (object.metadata.trace_ready_ns.has_value()) {
+  // the object to subscribers notified before this one, and, for the stream's
+  // first copy, opening it, which counts as header work.
+  if (object.metadata.trace_ready_ns.has_value() && setup.has_value()) {
+    setup->record(*trace_copy(), *object.metadata.trace_ready_ns,
+                  clone_start_ns);
+  } else if (object.metadata.trace_ready_ns.has_value()) {
     trace_copy()
         ->phase_at(MOQ_TRACE_OBJECT_PHASE_DELIVERY_WAIT,
                    *object.metadata.trace_ready_ns)
