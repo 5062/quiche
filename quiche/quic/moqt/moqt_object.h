@@ -6,6 +6,7 @@
 #define QUICHE_QUIC_MOQT_MOQT_OBJECT_H_
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -48,6 +49,10 @@ struct PublishedObjectMetadata {
   // When the relay cache first made the object readable, on the trace clock.
   // Each outbound copy's delivery wait runs from here until its clone starts.
   mutable std::optional<uint64_t> trace_ready_ns;
+  // The object's inbound lifecycle, which the relay cache creates empty with
+  // the identity. The stream reading the object starts it in place and ends it
+  // when the object ends; the cache ends it when it evicts the object first.
+  mutable std::shared_ptr<std::optional<moq_trace::Object>> trace_inbound;
 #endif
   bool IsMalformed(const PublishedObjectMetadata& other,
                    bool ignore_status = false) const {
@@ -99,10 +104,13 @@ class CachedObject {
 #if defined(QUICHE_MOQ_TRACE)
   // Assign the cache's logical identity, and the instant the object became
   // readable, before notifying any listener of its first fragment.
-  void SetTraceIdentity(moq_trace::LogicalId logical_id, uint64_t ready_ns) {
+  void SetTraceIdentity(
+      moq_trace::LogicalId logical_id, uint64_t ready_ns,
+      std::shared_ptr<std::optional<moq_trace::Object>> inbound) {
     absl::MutexLock lock(mutex_);
     metadata_.trace_logical_id = logical_id;
     metadata_.trace_ready_ns = ready_ns;
+    metadata_.trace_inbound = std::move(inbound);
   }
 #endif
   bool fin_after_this() const ABSL_LOCKS_EXCLUDED(mutex_) {

@@ -326,8 +326,15 @@ class QUICHE_EXPORT IncomingDataStream : public webtransport::StreamVisitor,
                            uint64_t store_start_ns, bool first_fragment);
   // Ends the inbound object in progress, if any, with how it ended.
   void FinishTraceObject(moq_trace_object_outcome outcome);
+  // The inbound object in progress, unless none is or the cache ended it.
+  moq_trace::Object* trace_object() const {
+    return trace_object_ != nullptr && trace_object_->has_value()
+               ? &**trace_object_
+               : nullptr;
+  }
 
-  std::optional<moq_trace::Object> trace_object_;
+  // Shared with the relay cache through `trace_inbound`.
+  std::shared_ptr<std::optional<moq_trace::Object>> trace_object_;
   std::optional<PendingTraceHeader> trace_header_;
   std::optional<uint64_t> trace_payload_start_ns_;
   bool trace_fragment_succeeded_ = false;

@@ -534,7 +534,7 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
                                          bool end_of_message) {
 #if defined(QUICHE_MOQ_TRACE)
   trace_fragment_succeeded_ = false;
-  if ((trace_object_.has_value() || trace_header_.has_value()) &&
+  if ((trace_object() != nullptr || trace_header_.has_value()) &&
       !payload.empty()) {
     trace_payload_start_ns_ = quic_trace::now_ns();
   }
@@ -624,7 +624,7 @@ void IncomingDataStream::OnObjectMessage(const MoqtObject& message,
       metadata.arrival_time = clock_->Now();
 #if defined(QUICHE_MOQ_TRACE)
       std::optional<uint64_t> store_start_ns;
-      if (trace_object_.has_value() || trace_header_.has_value()) {
+      if (trace_object() != nullptr || trace_header_.has_value()) {
         store_start_ns = quic_trace::now_ns();
       }
 #endif
@@ -680,8 +680,10 @@ void IncomingDataStream::OnObjectHeader(const MoqtObject& message,
 
 void IncomingDataStream::StartTraceObject(
     const PublishedObjectMetadata& metadata) {
-  if (trace_object_.has_value() || !trace_header_.has_value() ||
-      !metadata.trace_logical_id.has_value()) {
+  if (trace_object() != nullptr || !trace_header_.has_value() ||
+      !metadata.trace_logical_id.has_value() ||
+      metadata.trace_inbound == nullptr ||
+      metadata.trace_inbound->has_value()) {
     return;
   }
   const PendingTraceHeader& pending = *trace_header_;
@@ -698,12 +700,13 @@ void IncomingDataStream::StartTraceObject(
   context.stream_offset_start = pending.start_offset;
   context.start_ns = pending.start_ns;
   context.payload_bytes = pending.message.payload_length;
-  trace_object_.emplace(context);
-  auto header_phase = trace_object_->phase_at(
+  trace_object_ = metadata.trace_inbound;
+  trace_object_->emplace(context);
+  auto header_phase = trace_object()->phase_at(
       MOQ_TRACE_OBJECT_PHASE_HEADER_PARSE, trace_header_->start_ns);
   header_phase.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS,
                          trace_header_->end_ns);
-  trace_object_->set_stream_offset_end(trace_header_->end_offset);
+  trace_object()->set_stream_offset_end(trace_header_->end_offset);
 }
 
 // The phases of one fragment run back to back. PayloadRead covers the stream's
@@ -721,39 +724,39 @@ void IncomingDataStream::TraceObjectFragment(
   const uint64_t stored_ns = fan_out_start_ns.has_value()
                                  ? *fan_out_start_ns
                                  : quic_trace::now_ns();
-  if (!trace_object_.has_value()) {
+  if (trace_object() == nullptr) {
     trace_payload_start_ns_.reset();
     return;
   }
   if (trace_payload_start_ns_.has_value()) {
-    auto payload = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ,
-                                           *trace_payload_start_ns_);
+    auto payload = trace_object()->phase_at(
+        MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ, *trace_payload_start_ns_);
     payload.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, store_start_ns);
     trace_payload_start_ns_.reset();
   }
-  auto store = trace_object_->phase_at(
+  auto store = trace_object()->phase_at(
       first_fragment ? MOQ_TRACE_OBJECT_PHASE_CREATE
                      : MOQ_TRACE_OBJECT_PHASE_FRAME_COMMIT,
       store_start_ns);
   store.finish_at(MOQ_TRACE_OBJECT_OUTCOME_SUCCESS, stored_ns);
   if (metadata.trace_fan_out.has_value()) {
-    metadata.trace_fan_out->record(*trace_object_);
+    metadata.trace_fan_out->record(*trace_object());
   }
 }
 
 void IncomingDataStream::OnObjectPayloadConsumed(size_t,
                                                  bool end_of_message) {
-  if (!trace_object_.has_value()) {
+  if (trace_object() == nullptr) {
     if (end_of_message) {
       trace_header_.reset();
       trace_payload_start_ns_.reset();
     }
     return;
   }
-  trace_object_->set_stream_offset_end(stream_->ReadOffset());
+  trace_object()->set_stream_offset_end(stream_->ReadOffset());
   if (trace_payload_start_ns_.has_value()) {
-    auto payload = trace_object_->phase_at(MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ,
-                                           *trace_payload_start_ns_);
+    auto payload = trace_object()->phase_at(
+        MOQ_TRACE_OBJECT_PHASE_PAYLOAD_READ, *trace_payload_start_ns_);
     payload.finish(trace_fragment_succeeded_ ? MOQ_TRACE_OBJECT_OUTCOME_SUCCESS
                                              : MOQ_TRACE_OBJECT_OUTCOME_FAILED);
     trace_payload_start_ns_.reset();
@@ -767,10 +770,11 @@ void IncomingDataStream::OnObjectPayloadConsumed(size_t,
 }
 
 void IncomingDataStream::FinishTraceObject(moq_trace_object_outcome outcome) {
-  if (trace_object_.has_value()) {
-    trace_object_->finish(outcome);
-    trace_object_.reset();
+  if (trace_object() != nullptr) {
+    trace_object()->finish(outcome);
+    trace_object_->reset();
   }
+  trace_object_.reset();
 }
 #endif
 
@@ -862,8 +866,8 @@ void IncomingDataStream::OnCanRead() {
 void IncomingDataStream::OnParsingError(MoqtError error_code,
                                         absl::string_view reason) {
 #if defined(QUICHE_MOQ_TRACE)
-  if (trace_object_.has_value()) {
-    trace_object_->set_stream_offset_end(stream_->ReadOffset());
+  if (trace_object() != nullptr) {
+    trace_object()->set_stream_offset_end(stream_->ReadOffset());
     FinishTraceObject(MOQ_TRACE_OBJECT_OUTCOME_FAILED);
   }
   trace_payload_start_ns_.reset();

@@ -33,6 +33,7 @@ MoQ object lifecycles, one event stream per logical object:
 | `IncomingDataStream::OnObjectMessage` | per fragment, a payload read phase followed by a create phase (first fragment) or a frame commit phase (each later fragment) |
 | `MoqtRelayTrackPublisher::OnObjectFragment` | the listener fan-out, which ends the create or frame commit phase and is recorded as notify |
 | `IncomingDataStream::OnObjectPayloadConsumed` | object end, and payload read for a fragment that never reached the cache |
+| `MoqtRelayTrackPublisher::OnObjectFragment`, group eviction | `abandoned` object end for an object of the evicted group still arriving, whose stream may never end |
 | `OutgoingSubgroupStream::SendObjects` | clone phase, one TX object per subscriber copy in the subscription's window, and the copy work that notify excludes |
 | `OutgoingUniStream::WriteObjectToStream` | header encode phase, payload write phase |
 

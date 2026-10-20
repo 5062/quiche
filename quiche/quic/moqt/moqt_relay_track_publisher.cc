@@ -87,6 +87,19 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       for (MoqtObjectListener* listener : listeners_) {
         listener->OnGroupAbandoned(queue_.begin()->first);
       }
+#if defined(QUICHE_MOQ_TRACE)
+      // The relay gives up on objects of the group still arriving, though
+      // their streams may stay open, so their inbound lifecycles end here.
+      for (const auto& [id, subgroup] : queue_.begin()->second.subgroups) {
+        for (const auto& [object_id, object] : subgroup) {
+          const auto inbound = object.metadata().trace_inbound;
+          if (inbound != nullptr && inbound->has_value()) {
+            (*inbound)->finish(MOQ_TRACE_OBJECT_OUTCOME_ABANDONED);
+            inbound->reset();
+          }
+        }
+      }
+#endif
       queue_.erase(queue_.begin());
     }
   }
@@ -188,9 +201,11 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
       }
       metadata.trace_logical_id = *group.trace_next_logical_id;
       ++group.trace_next_logical_id->frame;
+      metadata.trace_inbound =
+          std::make_shared<std::optional<moq_trace::Object>>();
       // The object is readable from the cache once inserted above.
       it->second.SetTraceIdentity(*metadata.trace_logical_id,
-                                  quic_trace::now_ns());
+                                  quic_trace::now_ns(), metadata.trace_inbound);
     }
 #endif
   }
@@ -213,6 +228,7 @@ void MoqtRelayTrackPublisher::OnObjectFragment(
     }
 #if defined(QUICHE_MOQ_TRACE)
     metadata.trace_logical_id = cached_metadata.trace_logical_id;
+    metadata.trace_inbound = cached_metadata.trace_inbound;
 #endif
     // This could complete an incomplete object.
     if (incomplete) {

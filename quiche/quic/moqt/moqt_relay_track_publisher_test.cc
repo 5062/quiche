@@ -427,6 +427,28 @@ TEST_F(MoqtRelayTrackPublisherTest, ObjectsOfAGroupShareItsLogicalGroup) {
   EXPECT_NE(logical_id(next_group).group, logical_id(first).group);
   EXPECT_EQ(logical_id(next_group).frame, 0u);
 }
+
+// An object still arriving when its group leaves the cache is abandoned there,
+// though its stream may never end, so its inbound lifecycle ends with it.
+TEST_F(MoqtRelayTrackPublisherTest, EvictionEndsAnUnfinishedInboundObject) {
+  SubscribeAndOk();
+  const Location partial = kLargestLocation.Next();
+  EXPECT_CALL(listener_, OnNewObjectAvailable(partial, Optional(0), 128));
+  PublishedObjectMetadata fragment{
+      partial, 0, "", MoqtObjectStatus::kNormal, 128, 6};
+  publisher_.OnObjectFragment(kTrackName, fragment, "obj", /*offset=*/0);
+  ASSERT_NE(fragment.trace_inbound, nullptr);
+  // The stream reading the object starts its lifecycle in the shared slot.
+  fragment.trace_inbound->emplace(moq_trace::ObjectContext{});
+  for (uint64_t group = partial.group + 1; group < partial.group + 3; ++group) {
+    ObjectArrives(Location(group, 0), 0, MoqtObjectStatus::kNormal, "x");
+    EXPECT_TRUE(fragment.trace_inbound->has_value());
+  }
+  EXPECT_CALL(listener_, OnGroupAbandoned(partial.group));
+  ObjectArrives(Location(partial.group + 3, 0), 0, MoqtObjectStatus::kNormal,
+                "x");
+  EXPECT_FALSE(fragment.trace_inbound->has_value());
+}
 #endif
 
 // The status of an object that arrives in fragments is only known once the last
